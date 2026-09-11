@@ -42,7 +42,7 @@ Add the SDK as a component:
 
 ```sh
 cd <your-project>
-git submodule add https://github.com/fernandofontes/dwin-sdk components/dwin
+git submodule add https://github.com/fjuliofontes/dwin-sdk components/dwin
 ```
 
 then add `dwin` to your component's `REQUIRES`, and:

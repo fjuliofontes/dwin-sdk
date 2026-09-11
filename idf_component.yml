@@ -3,9 +3,9 @@ description: >
   Driver and OTA SDK for DWIN DGUS displays: VP read/write, pages, text, icons,
   brightness, RTC, plus a streaming writer that updates the display assets
   (.icl, fonts, ...) in the NOR flash at runtime.
-url: https://github.com/fernandofontes/dwin-sdk
-repository: https://github.com/fernandofontes/dwin-sdk.git
-issues: https://github.com/fernandofontes/dwin-sdk/issues
+url: https://github.com/fjuliofontes/dwin-sdk
+repository: https://github.com/fjuliofontes/dwin-sdk.git
+issues: https://github.com/fjuliofontes/dwin-sdk/issues
 license: MIT
 tags:
   - dwin
