@@ -9,11 +9,10 @@ set(dwin_srcs
     "ports/esp-idf/dwin_port_esp_idf.c")
 
 set(dwin_requires driver esp_timer)
-set(dwin_priv_requires "")
+set(dwin_priv_requires esp_http_client)
 
 if(CONFIG_DWIN_OTA_HTTP)
     list(APPEND dwin_srcs "ports/esp-idf/dwin_ota_http_esp_idf.c")
-    list(APPEND dwin_priv_requires esp_http_client)
 endif()
 
 idf_component_register(
