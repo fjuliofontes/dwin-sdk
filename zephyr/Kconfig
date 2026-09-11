@@ -1,0 +1,72 @@
+menuconfig DWIN
+    bool "DWIN DGUS display SDK"
+    help
+      Driver and OTA SDK for DWIN DGUS displays.
+
+if DWIN
+
+config DWIN_PORT
+    bool "Build the Zephyr UART port"
+    default y
+    depends on SERIAL
+    select UART_INTERRUPT_DRIVEN
+    help
+      Ready made bus IO glue on top of the interrupt driven UART API. The
+      display UART is taken from the display-uart devicetree alias unless one
+      is passed to dwin_port_init().
+
+config DWIN_RING_BUFFER_SIZE
+    int "RX ring buffer size"
+    default 50
+    depends on DWIN_PORT
+    range 16 512
+    help
+      Size of the software RX ring buffer filled by the UART interrupt.
+
+config DWIN_OTA_DOWNLOADER
+    bool "Build the downloader based OTA client"
+    default n
+    depends on DOWNLOADER
+    help
+      Convenience layer that pulls a comma separated list of DGUS files with the
+      nRF Connect SDK downloader library and streams them into the display NOR
+      flash.
+
+config DWIN_OTA_SOCKET_RETRIES
+    int "Socket retries per file"
+    default 2
+    depends on DWIN_OTA_DOWNLOADER
+
+config DWIN_OTA_SEC_TAG_LIST_SIZE_MAX
+    int "Maximum number of TLS security tags"
+    default 1
+    depends on DWIN_OTA_DOWNLOADER
+
+config DWIN_OTA_DOWNLOADER_BUF_SIZE
+    int "Downloader buffer size"
+    default 2160
+    depends on DWIN_OTA_DOWNLOADER
+    help
+      Buffer handed to the downloader library. A multiple of 240 keeps the
+      fragments aligned with the display variable storage writes.
+
+config DWIN_CMD_SIZE
+    int "Command response buffer size"
+    default 50
+    range 16 512
+
+config DWIN_RESPONSE_TIMEOUT_MS
+    int "Response timeout (ms)"
+    default 500
+    range 50 5000
+
+config DWIN_MUTEX_TIMEOUT_MS
+    int "Bus mutex timeout (ms)"
+    default 100
+    range 10 10000
+
+module = DWIN
+module-str = DWIN
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # DWIN

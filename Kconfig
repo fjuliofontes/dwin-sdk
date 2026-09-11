@@ -1,0 +1,34 @@
+menu "DWIN display SDK"
+
+config DWIN_OTA_HTTP
+    bool "Build the HTTP(S) OTA client"
+    default y
+    select ESP_HTTP_CLIENT_ENABLE_HTTPS if ESP_TLS_USING_MBEDTLS
+    help
+      Build dwin_ota_http, a convenience layer that downloads a comma separated
+      list of DGUS files over HTTP(S) and streams them into the display NOR
+      flash. Disable it if you feed dwin_ota from another transport.
+
+config DWIN_CMD_SIZE
+    int "Command response buffer size"
+    default 50
+    range 16 512
+    help
+      Scratch buffer used for the display replies. A read of N words needs
+      6 + 2 * N bytes.
+
+config DWIN_RESPONSE_TIMEOUT_MS
+    int "Response timeout (ms)"
+    default 500
+    range 50 5000
+    help
+      How long to wait for an ACK or a read reply from the display.
+
+config DWIN_MUTEX_TIMEOUT_MS
+    int "Bus mutex timeout (ms)"
+    default 100
+    range 10 10000
+    help
+      How long a caller waits for the display bus to become free.
+
+endmenu
