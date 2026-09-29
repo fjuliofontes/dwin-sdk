@@ -54,29 +54,46 @@ int dwin_ota_begin(dwin_ota_t *ota, const dwin_ota_cfg_t *cfg)
         return -1;
     }
 
+    uint32_t nor_flash_size = (cfg->nor_flash_size != 0) ? cfg->nor_flash_size : DWIN_OTA_NOR_FLASH_SIZE_DEFAULT;
+    uint32_t flash_slots = nor_flash_size / DWIN_NOR_FLASH_PAGE_SIZE;
+
+    if (cfg->file_id >= flash_slots)
+    {
+        DWIN_LOG_ERR("File id %d is out of range, a %u byte NOR flash holds %u file slots",
+                     cfg->file_id, (unsigned int)nor_flash_size, (unsigned int)flash_slots);
+        return -1;
+    }
+
+    /* Number of 32KB flash write operations required by this file. A file larger than
+     * one 256KB slot is allowed and simply spills into the following slots. */
+    uint32_t number_of_pages = cfg->file_size / DWIN_NOR_FLASH_WRITE_OPERATION_PAGE_SIZE;
+    if ((cfg->file_size % DWIN_NOR_FLASH_WRITE_OPERATION_PAGE_SIZE) != 0)
+    {
+        number_of_pages++;
+    }
+
+    uint32_t flash_pages = flash_slots * DWIN_OTA_PAGES_PER_FILE;
+    uint32_t page_base = cfg->file_id * DWIN_OTA_PAGES_PER_FILE;
+    uint32_t available_pages = flash_pages - page_base;
+
+    if (number_of_pages > available_pages)
+    {
+        DWIN_LOG_ERR("File of %u bytes does not fit in NOR flash: needs %u blocks from block %u, %u available",
+                     (unsigned int)cfg->file_size, (unsigned int)number_of_pages, (unsigned int)page_base,
+                     (unsigned int)available_pages);
+        return -1;
+    }
+
     memset(ota, 0, sizeof(*ota));
 
     ota->Obj = cfg->Obj;
     ota->callback = cfg->callback;
     ota->file_size = cfg->file_size;
-    ota->page_base = cfg->file_id * DWIN_OTA_PAGES_PER_FILE;
+    ota->page_base = (uint16_t)page_base;
+    ota->flash_pages = (uint16_t)flash_pages;
+    ota->number_of_pages = (uint16_t)number_of_pages;
     ota->last_progress = -1;
     ota->active = true;
-
-    /* Number of 32KB flash write operations required by this file. */
-    ota->number_of_pages = ota->file_size / DWIN_NOR_FLASH_WRITE_OPERATION_PAGE_SIZE;
-    if ((ota->file_size % DWIN_NOR_FLASH_WRITE_OPERATION_PAGE_SIZE) != 0)
-    {
-        ota->number_of_pages++;
-    }
-
-    if (ota->number_of_pages > DWIN_OTA_PAGES_PER_FILE)
-    {
-        DWIN_LOG_ERR("File of %u bytes does not fit in one %d byte DGUS file slot",
-                     (unsigned int)ota->file_size, DWIN_NOR_FLASH_PAGE_SIZE);
-        ota->active = false;
-        return -1;
-    }
 
     DWIN_LOG_INF("OTA started: file id %d, base block %d, %d pages, file size %u",
                  cfg->file_id, ota->page_base, ota->number_of_pages, (unsigned int)ota->file_size);
@@ -288,6 +305,14 @@ static int flush_page(dwin_ota_t *ota)
     {
         DWIN_LOG_ERR("Invalid number of pages: Current page %d, Number of pages %d",
                      ota->current_page, ota->number_of_pages);
+        ota->active = false;
+        return -1;
+    }
+
+    /* Only reachable with an unknown file size, where begin could not check the fit. */
+    if (destination_id >= ota->flash_pages)
+    {
+        DWIN_LOG_ERR("Block %d is past the end of the NOR flash (%d blocks)", destination_id, ota->flash_pages);
         ota->active = false;
         return -1;
     }

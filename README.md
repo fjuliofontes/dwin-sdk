@@ -112,6 +112,7 @@ const dwin_ota_cfg_t cfg = {
     .Obj = &display,
     .file_id = 23,          /* 23.icl goes into DGUS file slot 23 */
     .file_size = 262144,
+    .nor_flash_size = DWIN_OTA_NOR_FLASH_SIZE_16MB, /* 0 also means 16MB */
     .callback = on_ota_event,
 };
 

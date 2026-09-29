@@ -48,6 +48,13 @@ extern "C"
 /* Number of 32KB flash write operations needed to fill one 256KB file slot: 8. */
 #define DWIN_OTA_PAGES_PER_FILE (DWIN_NOR_FLASH_PAGE_SIZE / DWIN_NOR_FLASH_WRITE_OPERATION_PAGE_SIZE)
 
+/* NOR flash sizes found on DGUS displays. Most units carry 16MB, some low cost ones 8MB. */
+#define DWIN_OTA_NOR_FLASH_SIZE_8MB  (8UL * 1024UL * 1024UL)
+#define DWIN_OTA_NOR_FLASH_SIZE_16MB (16UL * 1024UL * 1024UL)
+
+/* NOR flash size assumed when dwin_ota_cfg_t.nor_flash_size is left at 0. */
+#define DWIN_OTA_NOR_FLASH_SIZE_DEFAULT DWIN_OTA_NOR_FLASH_SIZE_16MB
+
 /****************************************************** Typedefs ******************************************************/
 /**
  * @brief DWIN OTA event IDs.
@@ -127,6 +134,9 @@ typedef struct
     uint16_t file_id;
     /** Total size of the file, in bytes. Set to 0 when unknown. */
     uint32_t file_size;
+    /** Display NOR flash size, in bytes (DWIN_OTA_NOR_FLASH_SIZE_*).
+     *  Set to 0 to use DWIN_OTA_NOR_FLASH_SIZE_DEFAULT. */
+    uint32_t nor_flash_size;
     /** Optional progress callback, may be NULL. */
     dwin_ota_callback_t callback;
 } dwin_ota_cfg_t;
@@ -139,6 +149,7 @@ typedef struct
     DWIN_Object_t *Obj;
     dwin_ota_callback_t callback;
     uint16_t page_base;
+    uint16_t flash_pages;
     uint32_t file_size;
     uint32_t written_size;
     uint16_t number_of_pages;
