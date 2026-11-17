@@ -24,7 +24,8 @@ Validated on nRF54L15 (Zephyr) in production, and built for ESP32 (ESP-IDF v5.x)
 ```
 include/                    public headers
   dwin.h                    display driver
-  dwin_ota.h                transport agnostic OTA writer
+  dwin_ota.h                transport agnostic OTA writer, one DGUS file
+  dwin_ota_bundle.h         .dwpk bundle reader, a whole update in one download
   dwin_port.h               optional platform bus IO glue
   dwin_ota_http.h           HTTP(S) OTA client (ESP-IDF)
   dwin_ota_downloader.h     downloader OTA client (Zephyr / nRF Connect)
@@ -33,6 +34,7 @@ src/                        portable core, no platform dependencies
 ports/esp-idf/              UART glue + HTTP OTA client
 ports/zephyr/               UART glue + downloader OTA client
 examples/esp-idf/           dwin_basic, dwin_ota
+tools/dwin_pack.py          packs DGUS files into a .dwpk bundle
 docs/PROTOCOL.md            the reverse engineered DGUS protocol
 ```
 
@@ -102,7 +104,7 @@ The rest of the API is identical to the ESP-IDF one.
 
 ## Display OTA
 
-### The short version
+### One file at a time
 
 ```c
 #include "dwin_ota.h"
@@ -132,6 +134,66 @@ dwin_reset_display(&display);       /* reboot into the new assets */
 every 32KB while the panel commits a block to its flash — that delay is imposed
 by DGUS, not by this SDK. Budget roughly **70 seconds per 256KB file**.
 
+`CONFIG_DWIN_NOR_FLASH_WAIT_READY` replaces the fixed 6 seconds by polling the
+panel until it reports the block as written, which is much faster. It is
+experimental, see [docs/PROTOCOL.md](docs/PROTOCOL.md) before enabling it.
+
+### One bundle for the whole update
+
+A display update is usually several DGUS files. `tools/dwin_pack.py` packs them
+into a single `.dwpk` bundle, so the device downloads one file:
+
+```
+tools/dwin_pack.py pack DWIN_SET --version 1.4.0 --last 22 -o hmi-1.4.0.dwpk
+tools/dwin_pack.py list hmi-1.4.0.dwpk
+```
+
+The DGUS file number is taken from the leading digits of each file name
+(`23.icl`, `22_Config.bin`). The files are written largest first and the one
+named by `--last` at the very end: point it at the file that carries your
+version, usually 22, so an update that stops half way leaves the old version on
+the panel. The packer refuses files that do not fit in the NOR flash or that
+run into the slot of another file.
+
+The bundle is not compressed, the panel is the slow part. It starts with a table
+(see `include/dwin_ota_bundle.h` for the layout) that the device checks as a
+whole, CRC included, before the display is touched:
+
+```c
+#include "dwin_ota_bundle.h"
+
+dwin_ota_bundle_t bundle;
+const dwin_ota_bundle_cfg_t cfg = {
+    .Obj = &display,
+    .min_version = running_version, /* refuse a downgrade, NULL accepts anything */
+    .callback = on_ota_event,       /* PROGRESS over the whole bundle, FILE_FINISHED */
+};
+
+dwin_ota_bundle_begin(&bundle, &cfg);
+while ((n = read_from_wherever(buf, sizeof(buf))) > 0)
+{
+    if (dwin_ota_bundle_write(&bundle, buf, n) < 0)
+    {
+        break;
+    }
+}
+
+if (dwin_ota_bundle_finish(&bundle) < 0)   /* resets the display on success */
+{
+    dwin_ota_bundle_abort(&bundle);        /* brings a paused display back */
+}
+```
+
+The display is paused by the bundle once the table is accepted and reset by
+`dwin_ota_bundle_finish()`. When the source breaks mid way,
+`dwin_ota_bundle_rewind()` gives the bundle offset to resume from: the start of
+the file that was being written, the ones before it are kept. Every file also
+carries a CRC, but the data goes straight into the NOR flash, so a corrupt file
+is reported after it was written, not prevented.
+
+The context takes about 700 bytes of RAM with the default of 16 files per bundle
+(`CONFIG_DWIN_OTA_BUNDLE_MAX_FILES`).
+
 ### With the bundled HTTP client (ESP-IDF)
 
 ```c
@@ -141,17 +203,17 @@ dwin_ota_http_init(on_ota_event);
 
 const dwin_ota_http_cfg_t cfg = {
     .Obj = &display,
-    .base_url = "https://assets.example.com/display/v3",
-    .files = "0.icl,23.icl,32.icl",
+    .url = "https://assets.example.com/display/hmi-1.4.0.dwpk",
+    .min_version = running_version,
     .cert_pem = server_root_ca_pem,
 };
 
 dwin_ota_http_start(&cfg);
 ```
 
-The transfer runs in its own task, pauses the display before the first file,
-resets it after the last one, and reports `STARTED`, `PROGRESS`,
-`FILE_FINISHED`, `FINISHED`, `ERROR` and `CANCELLED` through the callback.
+The transfer runs in its own task and reports `STARTED`, `PROGRESS`,
+`FILE_FINISHED`, `FINISHED`, `ERROR` and `CANCELLED` through the callback. A
+broken download is resumed with an HTTP `Range` request.
 
 ### With the nRF Connect downloader (Zephyr)
 
@@ -161,12 +223,13 @@ CONFIG_DWIN_OTA_DOWNLOADER=y
 
 ```c
 dwin_ota_downloader_init(&display, on_ota_event);
-dwin_ota_downloader_start("assets.example.com", files, sec_tag, 0, 1024);
+dwin_ota_downloader_start("assets.example.com", "display/hmi-1.4.0.dwpk", running_version, sec_tag, 0, 1024);
 ```
 
 ### Feeding it from anything else
 
-`dwin_ota_begin/write/finish` is the whole contract. Anything that can produce
+`dwin_ota_bundle_begin/write/finish` for a bundle, or `dwin_ota_begin/write/finish`
+for a single DGUS file, is the whole contract. Anything that can produce
 bytes — MQTT chunks, an SD card, a USB bulk endpoint, a modem AT command — can
 drive a display update with a dozen lines of glue.
 

@@ -6,10 +6,10 @@
  * @author  Fernando Fontes
  * @note    Platform Target: ESP32 family (ESP-IDF v5.x)
  *
- * @details Convenience layer on top of dwin_ota: downloads a comma separated list
- *          of DGUS files from an HTTP(S) server and streams them straight into the
- *          display NOR flash. The whole transfer runs in its own task and reports
- *          through the dwin_ota event callback.
+ * @details Convenience layer on top of dwin_ota_bundle: downloads one .dwpk bundle
+ *          (see tools/dwin_pack.py) from an HTTP(S) server and streams its files
+ *          straight into the display NOR flash. The whole transfer runs in its own
+ *          task and reports through the dwin_ota event callback.
  *
  * TAB SIZE: 4 SPACES
  *
@@ -38,18 +38,22 @@ typedef struct
 {
     /** Display to update. */
     DWIN_Object_t *Obj;
-    /** Base URL the files hang from, without the trailing slash,
-     *  e.g. "https://assets.example.com/display/v3". */
-    const char *base_url;
-    /** Comma separated list of DGUS files, e.g. "0.icl,23.icl,32.icl". */
-    const char *files;
+    /** URL of the bundle, e.g. "https://assets.example.com/display/hmi-1.4.0.dwpk". */
+    const char *url;
+    /** Oldest bundle version accepted, dotted numeric ("1.4.0"), typically the version the
+     *  display runs. An older bundle is rejected before the display is touched. NULL accepts
+     *  any version. */
+    const char *min_version;
+    /** Display NOR flash size, in bytes (DWIN_OTA_NOR_FLASH_SIZE_*).
+     *  Set to 0 to use DWIN_OTA_NOR_FLASH_SIZE_DEFAULT. */
+    uint32_t nor_flash_size;
     /** PEM encoded server certificate for HTTPS. NULL uses the global CA store. */
     const char *cert_pem;
     /** Skip the server certificate check. Use for development only. */
     bool skip_cert_common_name_check;
     /** HTTP transaction timeout, in milliseconds. 0 selects 10000. */
     int timeout_ms;
-    /** Number of socket level retries per file. 0 selects 2. */
+    /** Number of times a broken download is resumed. 0 selects 2. */
     int retries;
     /** Priority of the OTA task. 0 selects 5. */
     int task_priority;
@@ -73,10 +77,13 @@ int dwin_ota_http_init(dwin_ota_callback_t client_callback);
 
 /**
  *
- * @brief   Start downloading and flashing the configured list of files.
+ * @brief   Start downloading and flashing the configured bundle.
  * @param   cfg   Transfer configuration. The strings it points to must stay valid
  *                until the transfer ends.
- * @note    The display is paused before the first file and reset after the last one.
+ * @note    The display is paused once the bundle file table has been accepted and
+ *          reset when the transfer ends, whether it succeeded or not.
+ * @note    A broken download is resumed from the file it stopped at, with an HTTP
+ *          Range request. A server that ignores it gets the whole bundle again.
  * @return  Returns 0 when the transfer was accepted, otherwise an error code.
  *
  **/

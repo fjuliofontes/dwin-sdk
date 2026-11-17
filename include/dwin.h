@@ -43,6 +43,14 @@ extern "C"
 #define DWIN_MUTEX_TIMEOUT_MS CONFIG_DWIN_MUTEX_TIMEOUT_MS
 #endif
 
+#if defined(CONFIG_DWIN_OTA_WRITE_RETRIES) && !defined(DWIN_OTA_WRITE_RETRIES)
+#define DWIN_OTA_WRITE_RETRIES CONFIG_DWIN_OTA_WRITE_RETRIES
+#endif
+
+#if defined(CONFIG_DWIN_NOR_FLASH_WAIT_READY) && !defined(DWIN_NOR_FLASH_WAIT_READY)
+#define DWIN_NOR_FLASH_WAIT_READY 1
+#endif
+
 /* Command response scratch buffer. Must hold the largest expected reply:
  * 6 bytes of framing + 2 bytes per read word. Raise it if multi-word reads of
  * more than 22 words are required. */
@@ -60,9 +68,24 @@ extern "C"
 #define DWIN_MUTEX_TIMEOUT_MS 100
 #endif
 
-/* Maximum DGUS payload size (the frame length byte is 8-bit and accounts for
- * the VP command byte plus the 2 VP address bytes). */
-#define DWIN_MAX_PAYLOAD_SIZE (0xFF - 3)
+/* Times a write to the variable storage update space is sent again when the
+ * display does not acknowledge it. Writing the same data to the same address
+ * twice is harmless, so a frame lost on the wire does not cost a whole update. */
+#ifndef DWIN_OTA_WRITE_RETRIES
+#define DWIN_OTA_WRITE_RETRIES 3
+#endif
+
+/* How the driver waits for a 32KB block to be committed to the NOR flash.
+ *   0: fixed DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS between two commits.
+ *   1: poll the display until it reports the commit as done. Much faster, but
+ *      experimental: check it on your display before shipping it. */
+#ifndef DWIN_NOR_FLASH_WAIT_READY
+#define DWIN_NOR_FLASH_WAIT_READY 0
+#endif
+
+/* Maximum DGUS payload size of one write. The frame length byte would allow 252
+ * bytes, but the T5L only stores the first 248 and still acknowledges the frame. */
+#define DWIN_MAX_PAYLOAD_SIZE 248
 
 /****************************************************** Typedefs ******************************************************/
 typedef int8_t (*IO_Init_Func)(void);
@@ -112,6 +135,10 @@ typedef enum
     DWIN_VARIABLE_STORAGE_START_UPDATE_SPACE_ADDRESS = 0x8000,
     DWIN_VARIABLE_STORAGE_END_UPDATE_SPACE_ADDRESS = 0xFFFF,
     DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS = 0x1770, // 6000ms
+    // Used instead of the fixed delay when DWIN_NOR_FLASH_WAIT_READY is set
+    DWIN_NOR_FLASH_READY_DELAY_FIELD = 0x00FF,    // delay field of the commit command
+    DWIN_NOR_FLASH_READY_TIMEOUT_MS = 5000,       // longest a commit may take
+    DWIN_NOR_FLASH_READY_POLL_MS = 10,            // pause between two status reads
     DWIN_VARIABLE_STORAGE_FRAGMENT_SIZE = 0x78,             // 120 words == 240 bytes
 } dwin_update_definitions_t;
 
@@ -289,6 +316,7 @@ int dwin_set_brightness(DWIN_Object_t *Obj, uint8_t brightness);
  * @note    Fragments must be written in order and every fragment but the last
  *          one of a 32KB block must be exactly
  *          DWIN_VARIABLE_STORAGE_FRAGMENT_SIZE * DWIN_VARIABLE_STORAGE_WORD_SIZE bytes.
+ * @note    Sent again up to DWIN_OTA_WRITE_RETRIES times when it is not acknowledged.
  * @return  Returns 0 on success, otherwise an error code.
  **/
 int dwin_write_data_to_variable_storage(DWIN_Object_t *Obj, uint8_t *pData, uint16_t data_size, uint16_t fragment);
@@ -299,7 +327,8 @@ int dwin_write_data_to_variable_storage(DWIN_Object_t *Obj, uint8_t *pData, uint
  * @param   Obj       Pointer to the DWIN object.
  * @param   destination_id 32KB destination block ID in the NOR flash.
  * @note    Blocks until DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS has elapsed
- *          since the previous commit.
+ *          since the previous commit, or, with DWIN_NOR_FLASH_WAIT_READY, until the
+ *          display reports this commit as done.
  * @return  Returns 0 on success, otherwise an error code.
  *
  **/
@@ -321,7 +350,10 @@ int dwin_update_selector(DWIN_Object_t *Obj, uint16_t address, uint16_t x, uint1
  * @brief   Write text to a text field on the DWIN display.
  * @param   Obj      Pointer to the DWIN object.
  * @param   address  VP address of the text field.
- * @param   text     Text to write to the text field.
+ * @param   text     Text to write to the text field (UTF-8, null terminated).
+ * @note    The text is converted to the panel's 8-bit encoding (Latin-1), so accented letters need a
+ *          Latin-1 font on the panel. Characters above U+00FF are shown as '?'.
+ *          At most DWIN_MAX_PAYLOAD_SIZE - 2 characters fit in one write; longer text is rejected.
  * @return  Returns 0 on success, otherwise an error code.
  *
  **/

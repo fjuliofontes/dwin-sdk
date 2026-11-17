@@ -25,6 +25,7 @@
 
 #include "dwin.h"
 #include "dwin_ota.h"
+#include "dwin_ota_bundle.h"
 #include "dwin_ota_downloader.h"
 #include "dwin_log.h"
 
@@ -38,43 +39,24 @@
 #endif
 
 #ifndef CONFIG_DWIN_OTA_DOWNLOADER_BUF_SIZE
-#define CONFIG_DWIN_OTA_DOWNLOADER_BUF_SIZE 2160 /* multiples of 240 bytes */
+#define CONFIG_DWIN_OTA_DOWNLOADER_BUF_SIZE 2160
 #endif
 
 /****************************************************** Typedefs ******************************************************/
 enum flags_t
 {
-    /** A single file download is in flight. */
+    /** A bundle download is in flight. */
     FLAG_DOWNLOADING,
-    /** The next fragment is the first one of a file. */
-    FLAG_FIRST_FRAGMENT,
     /** The application asked for the transfer to be cancelled. */
     FLAG_CANCEL,
-    /** The whole file list is done, failed or cancelled. Terminal events are
-     *  only reported once this is set, so chaining from one file to the next
-     *  does not look like the end of the transfer. */
-    FLAG_TRANSFER_ENDED,
 };
 
 /***************************************************** Constants ******************************************************/
 DWIN_LOG_MODULE_REGISTER();
 
 /***************************************************** Variables ******************************************************/
-static const char *dl_host;
-static const char *dl_file;
-static const char *dl_files;
-static char *dl_next_file;
-static char *dl_strtok_context;
-
-static size_t dl_fragment_size;
-static uint8_t dl_pdn_id;
-static int dl_sec_tag_list[CONFIG_DWIN_OTA_SEC_TAG_LIST_SIZE_MAX];
-static uint8_t dl_sec_tag_count;
-static uint8_t dl_number_of_files;
-static uint8_t dl_downloaded_files;
-
 static DWIN_Object_t *dl_dwin_object;
-static dwin_ota_t dl_ota;
+static dwin_ota_bundle_t dl_bundle;
 
 static struct downloader dl;
 static char dl_buf[CONFIG_DWIN_OTA_DOWNLOADER_BUF_SIZE];
@@ -87,6 +69,7 @@ static struct downloader_cfg dl_cfg = {
 };
 
 static struct downloader_host_cfg dl_host_cfg;
+static int dl_sec_tag_list[CONFIG_DWIN_OTA_SEC_TAG_LIST_SIZE_MAX];
 static int socket_retries_left;
 
 static bool initialized;
@@ -99,11 +82,7 @@ static void send_evt(enum dwin_ota_evt_id id);
 static void send_error_evt(void);
 static void set_error_state(enum dwin_ota_error_cause cause);
 static bool is_error(void);
-static void send_progress(int progress);
 static void stopped(void);
-static void set_host_and_file(char const *const host, char const *const file);
-static int dwin_download(const char *host, const char *file, const int *sec_tag_list,
-                         uint8_t sec_tag_count, uint8_t pdn_id, size_t fragment_size);
 
 /***************************************************** Functions ******************************************************/
 int dwin_ota_downloader_init(DWIN_Object_t *Obj, dwin_ota_callback_t client_callback)
@@ -134,40 +113,65 @@ int dwin_ota_downloader_init(DWIN_Object_t *Obj, dwin_ota_callback_t client_call
     return 0;
 }
 
-int dwin_ota_downloader_start(const char *hostname, const char *files, int sec_tag,
+int dwin_ota_downloader_start(const char *hostname, const char *file, const char *min_version, int sec_tag,
                               uint8_t pdn_id, size_t fragment_size)
 {
+    int err;
+
     if (!initialized)
     {
         return -EPERM;
     }
 
-    dl_sec_tag_list[0] = sec_tag;
-    dl_sec_tag_count = sec_tag < 0 ? 0 : 1;
-    dl_number_of_files = 1;
-    for (const char *p = files; *p != '\0'; p++)
+    if (hostname == NULL || file == NULL)
     {
-        if (*p == ',')
-        {
-            dl_number_of_files++;
-        }
-    }
-    dl_downloaded_files = 0;
-    atomic_clear_bit(&flags, FLAG_CANCEL);
-    atomic_clear_bit(&flags, FLAG_TRANSFER_ENDED);
-    dl_files = files;
-    dl_pdn_id = pdn_id;
-    dl_fragment_size = fragment_size;
-
-    // ignore the const qualifier since the caller is not using a const pointer
-    dl_next_file = strtok_r((char *)dl_files, ",", &dl_strtok_context);
-    if (dl_next_file == NULL)
-    {
-        DWIN_LOG_ERR("Failed to get first file from comma separated list");
         return -EINVAL;
     }
 
-    return dwin_download(hostname, dl_next_file, dl_sec_tag_list, dl_sec_tag_count, dl_pdn_id, dl_fragment_size);
+    if (atomic_test_and_set_bit(&flags, FLAG_DOWNLOADING))
+    {
+        return -EALREADY;
+    }
+
+    /* The bundle reports the progress and every finished file straight to the application. */
+    const dwin_ota_bundle_cfg_t bundle_cfg = {
+        .Obj = dl_dwin_object,
+        .min_version = min_version,
+        .callback = callback,
+    };
+
+    if (dwin_ota_bundle_begin(&dl_bundle, &bundle_cfg) < 0)
+    {
+        atomic_clear_bit(&flags, FLAG_DOWNLOADING);
+        return -EINVAL;
+    }
+
+    atomic_clear_bit(&flags, FLAG_CANCEL);
+    set_error_state(DWIN_OTA_ERROR_CAUSE_NO_ERROR);
+    socket_retries_left = CONFIG_DWIN_OTA_SOCKET_RETRIES;
+
+    dl_sec_tag_list[0] = sec_tag;
+
+    dl_host_cfg.pdn_id = pdn_id;
+    dl_host_cfg.range_override = fragment_size;
+    dl_host_cfg.family = AF_INET;
+    dl_host_cfg.keep_connection = false;
+    dl_host_cfg.sec_tag_list = dl_sec_tag_list;
+    dl_host_cfg.sec_tag_count = (sec_tag < 0) ? 0 : 1;
+
+    DWIN_LOG_INF("Downloading bundle %s from %s", file, hostname);
+
+    send_evt(DWIN_OTA_EVT_STARTED);
+
+    err = downloader_get_with_host_and_file(&dl, &dl_host_cfg, hostname, file, 0);
+    if (err != 0)
+    {
+        atomic_clear_bit(&flags, FLAG_DOWNLOADING);
+        (void)downloader_cancel(&dl);
+        return err;
+    }
+
+    return 0;
 }
 
 int dwin_ota_downloader_cancel(void)
@@ -182,7 +186,6 @@ int dwin_ota_downloader_cancel(void)
     }
 
     atomic_set_bit(&flags, FLAG_CANCEL);
-    atomic_set_bit(&flags, FLAG_TRANSFER_ENDED);
 
     err = downloader_cancel(&dl);
     if (err)
@@ -202,7 +205,6 @@ int dwin_ota_downloader_cancel(void)
 /************************************************* Internal Functions *************************************************/
 static void send_evt(enum dwin_ota_evt_id id)
 {
-    __ASSERT(id != DWIN_OTA_EVT_PROGRESS, "use send_progress");
     __ASSERT(id != DWIN_OTA_EVT_ERROR, "use send_error_evt");
     const struct dwin_ota_evt evt = {
         .id = id};
@@ -228,21 +230,29 @@ static bool is_error(void)
     return error_state != DWIN_OTA_ERROR_CAUSE_NO_ERROR;
 }
 
-static void send_progress(int progress)
-{
-    const struct dwin_ota_evt evt = {.id = DWIN_OTA_EVT_PROGRESS,
-                                     .progress = progress};
-    callback(&evt);
-}
-
 static void stopped(void)
 {
+    /* Nothing to report when the download never started. */
+    if (!atomic_test_bit(&flags, FLAG_DOWNLOADING))
+    {
+        return;
+    }
+
+    bool cancelled = atomic_test_and_clear_bit(&flags, FLAG_CANCEL);
+
+    if (is_error() || cancelled)
+    {
+        /* Also brings a paused display back. */
+        dwin_ota_bundle_abort(&dl_bundle);
+    }
+
     atomic_clear_bit(&flags, FLAG_DOWNLOADING);
+
     if (is_error())
     {
         send_error_evt();
     }
-    else if (atomic_test_and_clear_bit(&flags, FLAG_CANCEL))
+    else if (cancelled)
     {
         send_evt(DWIN_OTA_EVT_CANCELLED);
     }
@@ -254,10 +264,6 @@ static void stopped(void)
 
 static int downloader_callback(const struct downloader_evt *event)
 {
-    size_t offset;
-    size_t file_size;
-    int err;
-
     if (event == NULL)
     {
         return -EINVAL;
@@ -266,104 +272,26 @@ static int downloader_callback(const struct downloader_evt *event)
     switch (event->id)
     {
     case DOWNLOADER_EVT_FRAGMENT:
-    {
-        if (atomic_test_and_clear_bit(&flags, FLAG_FIRST_FRAGMENT))
-        {
-            err = downloader_file_size_get(&dl, &file_size);
-            if (err != 0)
-            {
-                DWIN_LOG_DBG("file_size_get err: %d", err);
-                set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
-                goto error_and_close;
-            }
-
-            /* Pause the display once, before the very first file. */
-            if (dl_downloaded_files == 0)
-            {
-                if (dwin_pause_display(dl_dwin_object) < 0)
-                {
-                    DWIN_LOG_ERR("Failed to pause DWIN display");
-                    set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-                    goto error_and_close;
-                }
-            }
-
-            const dwin_ota_cfg_t ota_cfg = {
-                .Obj = dl_dwin_object,
-                .file_id = dwin_ota_file_id_from_name(dl_file),
-                .file_size = (uint32_t)file_size,
-                .callback = NULL, /* progress is aggregated over the whole file list below */
-            };
-
-            if (dwin_ota_begin(&dl_ota, &ota_cfg) < 0)
-            {
-                set_error_state(DWIN_OTA_ERROR_CAUSE_INVALID_UPDATE);
-                goto error_and_close;
-            }
-        }
-
-        if (dwin_ota_write(&dl_ota, (const uint8_t *)event->fragment.buf, event->fragment.len) < 0)
+        /* The downloader resumes a broken connection from where it stopped, so the fragments
+         * always come as one continuous stream. */
+        if (dwin_ota_bundle_write(&dl_bundle, (const uint8_t *)event->fragment.buf, event->fragment.len) < 0)
         {
             DWIN_LOG_ERR("Failed to write the fragment to the display");
-            set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
+            set_error_state(dwin_ota_bundle_error_cause_get(&dl_bundle));
             goto error_and_close;
         }
-
-        // Get the downloaded size
-        err = downloader_downloaded_size_get(&dl, &offset);
-        if (err != 0)
-        {
-            DWIN_LOG_DBG("unable to get downloaded size err: %d", err);
-            set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
-            goto error_and_close;
-        }
-
-        int progress = dwin_ota_progress_get(&dl_ota);
-        send_progress((dl_downloaded_files * 100 / dl_number_of_files) + (progress / dl_number_of_files));
-
-        DWIN_LOG_DBG("Progress: %u bytes", (unsigned int)offset);
         break;
-    }
 
     case DOWNLOADER_EVT_DONE:
         DWIN_LOG_DBG("DOWNLOADER_EVT_DONE");
 
-        if (dwin_ota_finish(&dl_ota) < 0)
+        /* Resets the display, which boots into the new files. */
+        if (dwin_ota_bundle_finish(&dl_bundle) < 0)
         {
-            DWIN_LOG_ERR("Failed to commit the last block to the NOR flash");
-            set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
+            DWIN_LOG_ERR("Failed to close the bundle transfer");
+            set_error_state(dwin_ota_bundle_error_cause_get(&dl_bundle));
             goto error_and_close;
         }
-
-        dl_downloaded_files++;
-        send_evt(DWIN_OTA_EVT_FILE_FINISHED);
-
-        dl_next_file = strtok_r(NULL, ",", &dl_strtok_context);
-        if (dl_next_file != NULL)
-        {
-            /* Release the per file guard so the next download can be armed. The
-             * transfer itself is still running, so FLAG_TRANSFER_ENDED stays clear
-             * and the DOWNLOADER_EVT_STOPPED that follows is ignored. */
-            atomic_clear_bit(&flags, FLAG_DOWNLOADING);
-            err = dwin_download(dl_host, dl_next_file, dl_sec_tag_list, dl_sec_tag_count, dl_pdn_id, dl_fragment_size);
-            if (err != 0)
-            {
-                DWIN_LOG_ERR("Failed to start next download");
-                set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
-                goto error_and_close;
-            }
-            break;
-        }
-
-        if (dwin_reset_display(dl_dwin_object) < 0)
-        {
-            DWIN_LOG_ERR("Failed to reset DWIN display");
-            set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-            goto error_and_close;
-        }
-
-        send_progress(100);
-        atomic_set_bit(&flags, FLAG_TRANSFER_ENDED);
         break;
 
     case DOWNLOADER_EVT_ERROR:
@@ -412,11 +340,7 @@ static int downloader_callback(const struct downloader_evt *event)
         goto error_and_close;
 
     case DOWNLOADER_EVT_STOPPED:
-        /* The downloader also stops between two files of the same transfer. */
-        if (!atomic_test_bit(&flags, FLAG_TRANSFER_ENDED))
-        {
-            break;
-        }
+        /* Always comes last, whether the download finished, failed or was cancelled. */
         stopped();
         break;
 
@@ -428,79 +352,5 @@ static int downloader_callback(const struct downloader_evt *event)
     return 0;
 
 error_and_close:
-    dwin_ota_abort(&dl_ota);
-    atomic_set_bit(&flags, FLAG_TRANSFER_ENDED);
     return -1;
-}
-
-static void set_host_and_file(char const *const host, char const *const file)
-{
-    DWIN_LOG_INF("Setting host and file: %s, %s", host, file);
-
-    dl_host = host;
-    dl_file = file;
-
-    DWIN_LOG_INF("DGUS file id: %d", dwin_ota_file_id_from_name(file));
-}
-
-static int dwin_download(const char *host, const char *file,
-                         const int *sec_tag_list, uint8_t sec_tag_count, uint8_t pdn_id, size_t fragment_size)
-{
-    if (host == NULL || file == NULL || callback == NULL)
-    {
-        return -EINVAL;
-    }
-
-    if (atomic_test_and_set_bit(&flags, FLAG_DOWNLOADING))
-    {
-        return -EALREADY;
-    }
-
-    int err;
-    static int sec_tag_list_copy[CONFIG_DWIN_OTA_SEC_TAG_LIST_SIZE_MAX];
-
-    dl_host_cfg.pdn_id = pdn_id;
-    dl_host_cfg.range_override = fragment_size;
-    dl_host_cfg.family = AF_INET;
-    // Keep connection if there are more than one file to download and we are not on the last file
-    if ((dl_number_of_files > 1) && (dl_downloaded_files < dl_number_of_files - 1))
-    {
-        dl_host_cfg.keep_connection = true;
-    }
-    else
-    {
-        dl_host_cfg.keep_connection = false;
-    }
-
-    if (sec_tag_count > ARRAY_SIZE(sec_tag_list_copy))
-    {
-        atomic_clear_bit(&flags, FLAG_DOWNLOADING);
-        return -E2BIG;
-    }
-
-    set_error_state(DWIN_OTA_ERROR_CAUSE_NO_ERROR);
-
-    set_host_and_file(host, file);
-
-    if ((sec_tag_list != NULL) && (sec_tag_count > 0))
-    {
-        memcpy(sec_tag_list_copy, sec_tag_list, sec_tag_count * sizeof(sec_tag_list[0]));
-
-        dl_host_cfg.sec_tag_count = sec_tag_count;
-        dl_host_cfg.sec_tag_list = sec_tag_list_copy;
-    }
-
-    socket_retries_left = CONFIG_DWIN_OTA_SOCKET_RETRIES;
-
-    atomic_set_bit(&flags, FLAG_FIRST_FRAGMENT);
-
-    err = downloader_get_with_host_and_file(&dl, &dl_host_cfg, dl_host, dl_file, 0);
-    if (err != 0)
-    {
-        atomic_clear_bit(&flags, FLAG_DOWNLOADING);
-        (void)downloader_cancel(&dl);
-        return err;
-    }
-
-    return 0;
 }

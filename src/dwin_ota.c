@@ -147,21 +147,17 @@ int dwin_ota_finish(dwin_ota_t *ota)
         return -1;
     }
 
-    /* Flush whatever is left in the staging buffer. The display always commits a
-     * full 32KB block, so a short tail simply leaves the rest of the block with
-     * the previous content of the update space. */
-    if (ota->bytes_in_buf > 0)
+    /* The display always commits a full 32KB block. Fill what the file leaves of the last
+     * one with 0xFF, like erased flash, so the previous content of the update space does not
+     * end up in the NOR flash behind the file. The last fragment commits the block. */
+    while ((ota->bytes_in_buf > 0) || (ota->fragment_index != 0))
     {
-        if (flush_fragment(ota) < 0)
-        {
-            return -1;
-        }
-    }
+        uint16_t capacity = fragment_capacity_get(ota);
 
-    /* A partially filled block still has to be committed. */
-    if (ota->fragment_index != 0)
-    {
-        if (flush_page(ota) < 0)
+        memset(&ota->buf[ota->bytes_in_buf], 0xFF, capacity - ota->bytes_in_buf);
+        ota->bytes_in_buf = capacity;
+
+        if (flush_fragment(ota) < 0)
         {
             return -1;
         }

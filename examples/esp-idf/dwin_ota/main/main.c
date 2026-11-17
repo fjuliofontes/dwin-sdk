@@ -6,9 +6,11 @@
  * @author  Fernando Fontes
  * @note    Platform Target: ESP32 family (ESP-IDF v5.x)
  *
- * @details Downloads a list of DGUS files over HTTP and rewrites them into the
- *          display NOR flash. Expect roughly 6 seconds per 32KB block, so a
- *          256KB .icl file takes about 50 seconds.
+ * @details Downloads a .dwpk bundle over HTTP and rewrites the DGUS files it carries
+ *          into the display NOR flash. Expect roughly 6 seconds per 32KB block, so a
+ *          256KB .icl file takes about 50 seconds. Build the bundle with:
+ *
+ *              tools/dwin_pack.py pack DWIN_SET --version 1.4.0 --last 22 -o hmi-1.4.0.dwpk
  *
  * TAB SIZE: 4 SPACES
  *
@@ -44,9 +46,8 @@
 #define WIFI_PASSWORD "my-password"
 #define WIFI_CONNECTED_BIT BIT0
 
-/* The DGUS files to refresh, named the way DGUS numbers its slots. */
-#define OTA_BASE_URL "http://192.168.1.10:8000/display/v3"
-#define OTA_FILES "0.icl,23.icl,32.icl"
+/* The bundle with the DGUS files to refresh. */
+#define OTA_BUNDLE_URL "http://192.168.1.10:8000/display/hmi-1.4.0.dwpk"
 
 /***************************************************** Constants ******************************************************/
 static const char *TAG = "example";
@@ -93,8 +94,7 @@ void app_main(void)
 
     const dwin_ota_http_cfg_t ota_cfg = {
         .Obj = &display,
-        .base_url = OTA_BASE_URL,
-        .files = OTA_FILES,
+        .url = OTA_BUNDLE_URL,
         .timeout_ms = 15000,
         .retries = 2,
     };

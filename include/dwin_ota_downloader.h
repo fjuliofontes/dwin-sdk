@@ -47,18 +47,21 @@ int dwin_ota_downloader_init(DWIN_Object_t *Obj, dwin_ota_callback_t client_call
 
 /**
  *
- * @brief   Start downloading and flashing a comma separated list of DGUS files.
- * @param   hostname       Host the files are served from.
- * @param   files          Comma separated list of files, e.g. "0.icl,23.icl".
+ * @brief   Start downloading and flashing a .dwpk bundle (see tools/dwin_pack.py).
+ * @param   hostname       Host the bundle is served from.
+ * @param   file           Path of the bundle on the host, e.g. "display/hmi-1.4.0.dwpk".
+ * @param   min_version    Oldest bundle version accepted, dotted numeric ("1.4.0"), typically the
+ *                         version the display runs. NULL accepts any version.
  * @param   sec_tag        TLS security tag, or a negative value for plain HTTP.
  * @param   pdn_id         PDN the transfer runs on, 0 for the default one.
  * @param   fragment_size  HTTP range override, in bytes.
- * @note    The files string is rewritten in place by strtok_r and must stay
- *          valid and writable until the transfer ends.
+ * @note    The strings must stay valid until the transfer ends.
+ * @note    The display is paused once the bundle file table has been accepted and reset when
+ *          the transfer ends, whether it succeeded or not.
  * @return  Returns 0 on success, otherwise a negative error code.
  *
  **/
-int dwin_ota_downloader_start(const char *hostname, const char *files, int sec_tag,
+int dwin_ota_downloader_start(const char *hostname, const char *file, const char *min_version, int sec_tag,
                               uint8_t pdn_id, size_t fragment_size);
 
 /**

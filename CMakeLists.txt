@@ -6,6 +6,7 @@
 set(dwin_srcs
     "src/dwin.c"
     "src/dwin_ota.c"
+    "src/dwin_ota_bundle.c"
     "ports/esp-idf/dwin_port_esp_idf.c")
 
 set(dwin_requires driver esp_timer)

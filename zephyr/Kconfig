@@ -28,12 +28,11 @@ config DWIN_OTA_DOWNLOADER
     default n
     depends on DOWNLOADER
     help
-      Convenience layer that pulls a comma separated list of DGUS files with the
-      nRF Connect SDK downloader library and streams them into the display NOR
-      flash.
+      Convenience layer that pulls a .dwpk bundle with the nRF Connect SDK
+      downloader library and streams its files into the display NOR flash.
 
 config DWIN_OTA_SOCKET_RETRIES
-    int "Socket retries per file"
+    int "Socket retries per bundle"
     default 2
     depends on DWIN_OTA_DOWNLOADER
 
@@ -47,8 +46,32 @@ config DWIN_OTA_DOWNLOADER_BUF_SIZE
     default 2160
     depends on DWIN_OTA_DOWNLOADER
     help
-      Buffer handed to the downloader library. A multiple of 240 keeps the
-      fragments aligned with the display variable storage writes.
+      Buffer handed to the downloader library.
+
+config DWIN_OTA_BUNDLE_MAX_FILES
+    int "Maximum number of files in an OTA bundle"
+    default 16
+    range 1 64
+    help
+      Largest number of DGUS files one .dwpk bundle may carry. The file table
+      is kept in RAM for the whole transfer, 16 bytes per file.
+
+config DWIN_OTA_WRITE_RETRIES
+    int "Retries of an unacknowledged OTA data frame"
+    default 3
+    range 0 10
+    help
+      Times a write to the display update space is sent again when the display
+      does not acknowledge it, before the update is abandoned.
+
+config DWIN_NOR_FLASH_WAIT_READY
+    bool "Poll the display instead of waiting 6 s per flash block (experimental)"
+    default n
+    help
+      By default the driver waits a fixed 6 seconds between two 32KB flash
+      commits. With this option it polls the display until the commit is
+      reported as done, which is much faster. Check it on your display before
+      shipping it.
 
 config DWIN_CMD_SIZE
     int "Command response buffer size"

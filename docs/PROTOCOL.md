@@ -111,9 +111,21 @@ Once the update space is full, VP `0x00AA` copies it into the NOR flash:
 After the ACK, VP `0x00AA` can be read back: the high byte drops from `0x5A` to
 `0x00` when the operation has completed.
 
-**The 6 second delay between two commits is mandatory.** Issuing the next
-commit early corrupts the flash content. The SDK enforces it by stamping the
-tick of the last commit on the object and sleeping the remainder.
+**By default the SDK waits 6 seconds between two commits.** Issuing the next
+commit early was seen to corrupt the flash content. The SDK enforces the delay
+by stamping the tick of the last commit on the object and sleeping the
+remainder.
+
+An experimental alternative is built with `CONFIG_DWIN_NOR_FLASH_WAIT_READY`
+(`-DDWIN_NOR_FLASH_WAIT_READY=1` outside Kconfig). The commit is then sent with
+`00 FF` in the delay field and the SDK reads VP `0x00AA` every 10 ms until the
+high byte is no longer `0x5A`, for 5 seconds at most, and moves on straight
+away. Other DGUS upload tools work this way, but it has not been validated with
+this SDK: check a full update on your display before shipping it.
+
+A data frame that is not acknowledged is sent again, up to
+`CONFIG_DWIN_OTA_WRITE_RETRIES` times: the same bytes at the same address do no
+harm. The commit itself is never repeated.
 
 ### 3.3 Block addressing
 
@@ -141,8 +153,10 @@ for each file:
 dwin_reset_display()                  ; reboot into the new assets
 ```
 
-A file shorter than a multiple of 32KB simply commits a partially refreshed
-final block; DGUS always transfers the full 32KB.
+DGUS always commits the full 32KB. For a file shorter than a multiple of 32KB
+the SDK fills the rest of the last block with `0xFF`, like erased flash, so the
+previous content of the update space does not land in the NOR flash behind the
+file.
 
 ### 3.5 Timing
 
@@ -157,7 +171,13 @@ but not with the flash delay.
   running GUI reads from, otherwise it renders garbage or locks up.
 - The display **reboots** after a reset command and needs a couple of seconds
   before it answers again.
+- A write frame carries 248 data bytes at most. The length byte would allow
+  252, but the T5L only stores the first 248 and still answers `OK`. This
+  leaves 246 characters for a text field, next to its `FF FF` end.
 - Strings written to a text VP are terminated with `FF FF`.
+- Text VPs in 8-bit mode take one byte per character. `dwin_write_text_field()`
+  converts UTF-8 input to Latin-1, so accented letters render as long as the
+  panel font covers Latin-1; anything above U+00FF is sent as `?`.
 - Hiding a widget is done by pointing its SP descriptor at `FF00` instead of a
   real VP; showing it again restores the VP.
 - A widget's colour attribute lives 3 words after its SP descriptor base.
