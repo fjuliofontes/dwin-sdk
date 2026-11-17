@@ -13,6 +13,7 @@
 /****************************************************** Includes ******************************************************/
 /* General includes. */
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,20 +24,32 @@
 
 #include "dwin.h"
 #include "dwin_ota.h"
+#include "dwin_ota_bundle.h"
 #include "dwin_ota_http.h"
 #include "dwin_log.h"
 
 /****************************************************** Defines *******************************************************/
-#define DWIN_OTA_HTTP_URL_SIZE 256
-#define DWIN_OTA_HTTP_FILE_LIST_SIZE 256
 #define DWIN_OTA_HTTP_CHUNK_SIZE 1024
+#define DWIN_OTA_HTTP_RANGE_SIZE 32
 
 #define DWIN_OTA_HTTP_DEFAULT_TIMEOUT_MS 10000
 #define DWIN_OTA_HTTP_DEFAULT_RETRIES 2
 #define DWIN_OTA_HTTP_DEFAULT_PRIORITY 5
 #define DWIN_OTA_HTTP_DEFAULT_STACK_SIZE 8192
 
+#define DWIN_OTA_HTTP_STATUS_OK 200
+#define DWIN_OTA_HTTP_STATUS_PARTIAL_CONTENT 206
+
 /****************************************************** Typedefs ******************************************************/
+enum download_result
+{
+    /** The whole bundle is in the display NOR flash. */
+    DOWNLOAD_DONE,
+    /** The connection broke, the download can be resumed. */
+    DOWNLOAD_RETRY,
+    /** The bundle or the display failed, or the transfer was cancelled. */
+    DOWNLOAD_ABORT,
+};
 
 /***************************************************** Constants ******************************************************/
 DWIN_LOG_MODULE_REGISTER();
@@ -44,14 +57,9 @@ DWIN_LOG_MODULE_REGISTER();
 /***************************************************** Variables ******************************************************/
 static dwin_ota_http_cfg_t ota_cfg;
 static dwin_ota_callback_t callback;
-static dwin_ota_t ota;
+static dwin_ota_bundle_t ota_bundle;
 
-static char ota_file_list[DWIN_OTA_HTTP_FILE_LIST_SIZE];
-static char ota_url[DWIN_OTA_HTTP_URL_SIZE];
 static uint8_t ota_chunk[DWIN_OTA_HTTP_CHUNK_SIZE];
-
-static uint8_t ota_number_of_files;
-static uint8_t ota_downloaded_files;
 
 static volatile bool ota_running;
 static volatile bool ota_cancel_request;
@@ -62,10 +70,8 @@ static void send_evt(enum dwin_ota_evt_id id);
 static void send_error_evt(void);
 static void set_error_state(enum dwin_ota_error_cause cause);
 static bool is_error(void);
-static void send_progress(int progress);
-static uint16_t count_occurrences(const char *s, char c);
 static enum dwin_ota_error_cause http_error_cause_get(esp_err_t err);
-static int download_file(const char *file_name);
+static enum download_result download_bundle(uint32_t offset);
 static void dwin_ota_http_task(void *arg);
 
 /***************************************************** Functions ******************************************************/
@@ -83,7 +89,7 @@ int dwin_ota_http_init(dwin_ota_callback_t client_callback)
 
 int dwin_ota_http_start(const dwin_ota_http_cfg_t *cfg)
 {
-    if (cfg == NULL || cfg->Obj == NULL || cfg->base_url == NULL || cfg->files == NULL || callback == NULL)
+    if (cfg == NULL || cfg->Obj == NULL || cfg->url == NULL || callback == NULL)
     {
         return -1;
     }
@@ -94,20 +100,8 @@ int dwin_ota_http_start(const dwin_ota_http_cfg_t *cfg)
         return -1;
     }
 
-    if (strlen(cfg->files) >= sizeof(ota_file_list))
-    {
-        DWIN_LOG_ERR("File list is longer than %d bytes", (int)sizeof(ota_file_list));
-        return -1;
-    }
-
     ota_cfg = *cfg;
 
-    /* Work on our own copy, strtok_r() rewrites the string in place. */
-    strncpy(ota_file_list, cfg->files, sizeof(ota_file_list) - 1);
-    ota_file_list[sizeof(ota_file_list) - 1] = '\0';
-
-    ota_number_of_files = count_occurrences(ota_file_list, ',') + 1;
-    ota_downloaded_files = 0;
     ota_cancel_request = false;
     ota_running = true;
     set_error_state(DWIN_OTA_ERROR_CAUSE_NO_ERROR);
@@ -169,25 +163,6 @@ static bool is_error(void)
     return error_state != DWIN_OTA_ERROR_CAUSE_NO_ERROR;
 }
 
-static void send_progress(int progress)
-{
-    const struct dwin_ota_evt evt = {.id = DWIN_OTA_EVT_PROGRESS,
-                                     .progress = progress};
-    callback(&evt);
-}
-
-static uint16_t count_occurrences(const char *s, char c)
-{
-    uint16_t count = 0;
-    while (*s)
-    {
-        if (*s == c)
-            count++;
-        s++;
-    }
-    return count;
-}
-
 static enum dwin_ota_error_cause http_error_cause_get(esp_err_t err)
 {
     switch (err)
@@ -206,23 +181,23 @@ static enum dwin_ota_error_cause http_error_cause_get(esp_err_t err)
 }
 
 /**
- * @brief   Download one DGUS file and stream it into the display NOR flash.
- * @param   In:   file_name   File to fetch, appended to the configured base URL.
- * @retval  Returns 0 on success, otherwise an error code.
+ * @brief   Download the bundle and stream it into the display NOR flash.
+ * @param   In:   offset   Bundle offset to start from, 0 for the whole bundle.
+ * @note    The error state is set whenever the result is not DOWNLOAD_DONE.
+ * @retval  Returns what to do next with the transfer.
  */
-static int download_file(const char *file_name)
+static enum download_result download_bundle(uint32_t offset)
 {
-    int ret = 0;
-    int64_t content_length;
+    enum download_result result = DOWNLOAD_RETRY;
     int status_code;
     esp_err_t err;
     esp_http_client_handle_t client = NULL;
+    char range[DWIN_OTA_HTTP_RANGE_SIZE];
 
-    snprintf(ota_url, sizeof(ota_url), "%s/%s", ota_cfg.base_url, file_name);
-    DWIN_LOG_INF("Downloading %s", ota_url);
+    DWIN_LOG_INF("Downloading %s from byte %u", ota_cfg.url, (unsigned int)offset);
 
     esp_http_client_config_t client_cfg = {
-        .url = ota_url,
+        .url = ota_cfg.url,
         .cert_pem = ota_cfg.cert_pem,
         .skip_cert_common_name_check = ota_cfg.skip_cert_common_name_check,
         .timeout_ms = (ota_cfg.timeout_ms > 0) ? ota_cfg.timeout_ms : DWIN_OTA_HTTP_DEFAULT_TIMEOUT_MS,
@@ -234,7 +209,13 @@ static int download_file(const char *file_name)
     {
         DWIN_LOG_ERR("Failed to initialize the HTTP client");
         set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
-        return -1;
+        return DOWNLOAD_ABORT;
+    }
+
+    if (offset > 0)
+    {
+        snprintf(range, sizeof(range), "bytes=%u-", (unsigned int)offset);
+        esp_http_client_set_header(client, "Range", range);
     }
 
     err = esp_http_client_open(client, 0);
@@ -242,157 +223,135 @@ static int download_file(const char *file_name)
     {
         DWIN_LOG_ERR("Failed to open the HTTP connection: %s", esp_err_to_name(err));
         set_error_state(http_error_cause_get(err));
-        ret = -1;
         goto cleanup_and_return;
     }
 
-    content_length = esp_http_client_fetch_headers(client);
+    if (esp_http_client_fetch_headers(client) < 0)
+    {
+        DWIN_LOG_ERR("Failed to fetch the HTTP headers");
+        set_error_state(DWIN_OTA_ERROR_CAUSE_DOWNLOAD_FAILED);
+        goto cleanup_and_return;
+    }
+
     status_code = esp_http_client_get_status_code(client);
 
-    if (status_code != 200)
+    if ((offset > 0) && (status_code == DWIN_OTA_HTTP_STATUS_OK))
+    {
+        /* The server ignored the Range header and sends the bundle from its first byte. */
+        DWIN_LOG_WRN("Server does not resume downloads, starting the bundle over");
+        if (dwin_ota_bundle_restart(&ota_bundle) < 0)
+        {
+            set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
+            result = DOWNLOAD_ABORT;
+            goto cleanup_and_return;
+        }
+    }
+    else if (status_code != ((offset > 0) ? DWIN_OTA_HTTP_STATUS_PARTIAL_CONTENT : DWIN_OTA_HTTP_STATUS_OK))
     {
         DWIN_LOG_ERR("Server answered with status %d", status_code);
         set_error_state(DWIN_OTA_ERROR_CAUSE_DOWNLOAD_FAILED);
-        ret = -1;
         goto cleanup_and_return;
     }
 
-    if (content_length <= 0)
-    {
-        DWIN_LOG_ERR("Server did not report a usable content length: %lld", (long long)content_length);
-        set_error_state(DWIN_OTA_ERROR_CAUSE_INVALID_UPDATE);
-        ret = -1;
-        goto cleanup_and_return;
-    }
-
-    const dwin_ota_cfg_t ota_file_cfg = {
-        .Obj = ota_cfg.Obj,
-        .file_id = dwin_ota_file_id_from_name(file_name),
-        .file_size = (uint32_t)content_length,
-        .callback = NULL, /* progress is aggregated over the whole file list below */
-    };
-
-    if (dwin_ota_begin(&ota, &ota_file_cfg) < 0)
-    {
-        set_error_state(DWIN_OTA_ERROR_CAUSE_INVALID_UPDATE);
-        ret = -1;
-        goto cleanup_and_return;
-    }
-
-    for (;;)
+    while (!dwin_ota_bundle_is_complete(&ota_bundle))
     {
         if (ota_cancel_request)
         {
             DWIN_LOG_WRN("Transfer cancelled by the application");
-            dwin_ota_abort(&ota);
-            ret = -1;
+            result = DOWNLOAD_ABORT;
             goto cleanup_and_return;
         }
 
         int read_len = esp_http_client_read(client, (char *)ota_chunk, sizeof(ota_chunk));
-        if (read_len < 0)
+        if (read_len <= 0)
         {
-            DWIN_LOG_ERR("Failed to read from the HTTP stream");
+            DWIN_LOG_ERR("HTTP stream ended before the end of the bundle: %d", read_len);
             set_error_state(DWIN_OTA_ERROR_CAUSE_DOWNLOAD_FAILED);
-            dwin_ota_abort(&ota);
-            ret = -1;
             goto cleanup_and_return;
         }
 
-        if (read_len == 0)
-        {
-            break;
-        }
-
-        if (dwin_ota_write(&ota, ota_chunk, (size_t)read_len) < 0)
+        if (dwin_ota_bundle_write(&ota_bundle, ota_chunk, (size_t)read_len) < 0)
         {
             DWIN_LOG_ERR("Failed to write the chunk to the display");
-            set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-            dwin_ota_abort(&ota);
-            ret = -1;
+            set_error_state(dwin_ota_bundle_error_cause_get(&ota_bundle));
+            result = DOWNLOAD_ABORT;
             goto cleanup_and_return;
         }
-
-        /* Aggregate the per file progress over the whole list of files. */
-        int progress = dwin_ota_progress_get(&ota);
-        send_progress((ota_downloaded_files * 100 / ota_number_of_files) + (progress / ota_number_of_files));
     }
 
-    if (dwin_ota_finish(&ota) < 0)
-    {
-        DWIN_LOG_ERR("Failed to commit the last block to the NOR flash");
-        set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-        ret = -1;
-        goto cleanup_and_return;
-    }
-
-    DWIN_LOG_INF("%s written to the display", file_name);
+    result = DOWNLOAD_DONE;
 
 cleanup_and_return:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
-    return ret;
+    return result;
 }
 
 static void dwin_ota_http_task(void *arg)
 {
-    char *file_name;
-    char *strtok_context = NULL;
-    int retries_left;
+    int retries_left = (ota_cfg.retries > 0) ? ota_cfg.retries : DWIN_OTA_HTTP_DEFAULT_RETRIES;
+    uint32_t offset = 0;
 
     (void)arg;
 
     send_evt(DWIN_OTA_EVT_STARTED);
 
-    if (dwin_pause_display(ota_cfg.Obj) < 0)
-    {
-        DWIN_LOG_ERR("Failed to pause the DWIN display");
-        set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-        goto stop_and_report;
-    }
+    /* The bundle reports the progress and every finished file straight to the application. */
+    const dwin_ota_bundle_cfg_t bundle_cfg = {
+        .Obj = ota_cfg.Obj,
+        .nor_flash_size = ota_cfg.nor_flash_size,
+        .min_version = ota_cfg.min_version,
+        .callback = callback,
+    };
 
-    file_name = strtok_r(ota_file_list, ",", &strtok_context);
-    if (file_name == NULL)
+    if (dwin_ota_bundle_begin(&ota_bundle, &bundle_cfg) < 0)
     {
-        DWIN_LOG_ERR("Failed to get the first file from the comma separated list");
         set_error_state(DWIN_OTA_ERROR_CAUSE_INVALID_CONFIGURATION);
         goto stop_and_report;
     }
 
-    while (file_name != NULL)
+    for (;;)
     {
-        retries_left = (ota_cfg.retries > 0) ? ota_cfg.retries : DWIN_OTA_HTTP_DEFAULT_RETRIES;
+        enum download_result result = download_bundle(offset);
 
-        while (download_file(file_name) < 0)
+        if (result == DOWNLOAD_DONE)
         {
-            if (ota_cancel_request || retries_left == 0)
-            {
-                goto stop_and_report;
-            }
-
-            DWIN_LOG_WRN("Download of %s failed, %d retries left...", file_name, retries_left);
-            retries_left--;
-            set_error_state(DWIN_OTA_ERROR_CAUSE_NO_ERROR);
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            break;
         }
 
-        ota_downloaded_files++;
-        send_evt(DWIN_OTA_EVT_FILE_FINISHED);
+        if (result == DOWNLOAD_ABORT || ota_cancel_request || retries_left == 0)
+        {
+            goto stop_and_report;
+        }
 
-        file_name = strtok_r(NULL, ",", &strtok_context);
+        DWIN_LOG_WRN("Download of the bundle failed, %d retries left...", retries_left);
+        retries_left--;
+
+        /* Pick the download up at the file it stopped in, the ones before are already written. */
+        if (dwin_ota_bundle_rewind(&ota_bundle, &offset) < 0)
+        {
+            set_error_state(DWIN_OTA_ERROR_CAUSE_INTERNAL);
+            goto stop_and_report;
+        }
+
+        set_error_state(DWIN_OTA_ERROR_CAUSE_NO_ERROR);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    if (dwin_reset_display(ota_cfg.Obj) < 0)
+    /* Resets the display, which boots into the new files. */
+    if (dwin_ota_bundle_finish(&ota_bundle) < 0)
     {
-        DWIN_LOG_ERR("Failed to reset the DWIN display");
-        set_error_state(DWIN_OTA_ERROR_CAUSE_DISPLAY);
-        goto stop_and_report;
+        set_error_state(dwin_ota_bundle_error_cause_get(&ota_bundle));
     }
-
-    send_progress(100);
 
 stop_and_report:
+    if (is_error() || ota_cancel_request)
+    {
+        /* Also brings a paused display back. */
+        dwin_ota_bundle_abort(&ota_bundle);
+    }
+
     ota_running = false;
 
     if (is_error())

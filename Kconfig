@@ -5,9 +5,34 @@ config DWIN_OTA_HTTP
     default y
     select ESP_HTTP_CLIENT_ENABLE_HTTPS if ESP_TLS_USING_MBEDTLS
     help
-      Build dwin_ota_http, a convenience layer that downloads a comma separated
-      list of DGUS files over HTTP(S) and streams them into the display NOR
-      flash. Disable it if you feed dwin_ota from another transport.
+      Build dwin_ota_http, a convenience layer that downloads a .dwpk bundle
+      over HTTP(S) and streams its files into the display NOR flash. Disable
+      it if you feed dwin_ota_bundle from another transport.
+
+config DWIN_OTA_BUNDLE_MAX_FILES
+    int "Maximum number of files in an OTA bundle"
+    default 16
+    range 1 64
+    help
+      Largest number of DGUS files one .dwpk bundle may carry. The file table
+      is kept in RAM for the whole transfer, 16 bytes per file.
+
+config DWIN_OTA_WRITE_RETRIES
+    int "Retries of an unacknowledged OTA data frame"
+    default 3
+    range 0 10
+    help
+      Times a write to the display update space is sent again when the display
+      does not acknowledge it, before the update is abandoned.
+
+config DWIN_NOR_FLASH_WAIT_READY
+    bool "Poll the display instead of waiting 6 s per flash block (experimental)"
+    default n
+    help
+      By default the driver waits a fixed 6 seconds between two 32KB flash
+      commits. With this option it polls the display until the commit is
+      reported as done, which is much faster. Check it on your display before
+      shipping it.
 
 config DWIN_CMD_SIZE
     int "Command response buffer size"

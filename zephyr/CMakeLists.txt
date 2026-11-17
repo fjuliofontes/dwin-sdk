@@ -7,7 +7,8 @@ if(CONFIG_DWIN)
     zephyr_library()
     zephyr_library_sources(
         ${CMAKE_CURRENT_LIST_DIR}/../src/dwin.c
-        ${CMAKE_CURRENT_LIST_DIR}/../src/dwin_ota.c)
+        ${CMAKE_CURRENT_LIST_DIR}/../src/dwin_ota.c
+        ${CMAKE_CURRENT_LIST_DIR}/../src/dwin_ota_bundle.c)
 
     if(CONFIG_DWIN_PORT)
         zephyr_library_sources(${CMAKE_CURRENT_LIST_DIR}/../ports/zephyr/dwin_port_zephyr.c)
