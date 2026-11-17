@@ -35,6 +35,9 @@
 /* Frame overhead accounted for by the DGUS length byte: VP command + VP address. */
 #define DWIN_FRAME_OVERHEAD 3
 
+/* Longest text a single write frame can carry: the payload also holds the 0xFFFF end of text. */
+#define DWIN_TEXT_MAX_BYTES (DWIN_MAX_PAYLOAD_SIZE - 2)
+
 /* Fixed offsets inside a reply frame. */
 #define DWIN_RESP_OFFSET_LENGTH 2
 #define DWIN_RESP_OFFSET_CMD 3
@@ -73,6 +76,7 @@ static int dwin_wait_for_ack(DWIN_Object_t *Obj);
 static void dwin_send_frame(DWIN_Object_t *Obj, uint8_t vp_cmd, uint16_t address, const uint8_t *pPayload, uint8_t payload_len);
 static int dwin_transact_write(DWIN_Object_t *Obj, uint16_t address, const uint8_t *pPayload, uint8_t payload_len, bool wait_ack);
 static bool dwin_is_ready(DWIN_Object_t *Obj);
+static uint8_t utf8_to_latin1(const char *in, uint8_t *out, uint8_t out_size);
 
 /***************************************************** Functions ******************************************************/
 int dwin_register_bus_io(DWIN_Object_t *Obj, IO_Init_Func IO_Init, IO_DeInit_Func IO_DeInit, IO_Flush_Func IO_FlushBuffer,
@@ -379,12 +383,15 @@ int dwin_write_text_field(DWIN_Object_t *Obj, uint16_t address, const char *text
         return -1;
     }
 
-    size_t text_len = strlen(text);
+    // the text fields use the panel's 8-bit encoding, where font 0 holds Latin-1 (accented letters)
+    // one spare byte so that a text longer than a frame can be told apart from one that just fits
+    uint8_t latin1[DWIN_TEXT_MAX_BYTES + 1];
+    uint8_t text_len = utf8_to_latin1(text, latin1, sizeof(latin1));
     uint8_t end_of_text[] = {0xFF, 0xFF};
 
-    if ((text_len + sizeof(end_of_text)) > DWIN_MAX_PAYLOAD_SIZE)
+    if (text_len > DWIN_TEXT_MAX_BYTES)
     {
-        DWIN_LOG_ERR("Text of %u bytes exceeds the maximum payload size", (unsigned int)text_len);
+        DWIN_LOG_ERR("Text exceeds the maximum of %u characters", (unsigned int)DWIN_TEXT_MAX_BYTES);
         return -1;
     }
 
@@ -407,7 +414,7 @@ int dwin_write_text_field(DWIN_Object_t *Obj, uint16_t address, const char *text
     Obj->fops.IO_Send(&cmd_len, sizeof(cmd_len));
     Obj->fops.IO_Send(&vp_cmd, sizeof(vp_cmd));
     Obj->fops.IO_Send(vp_address, sizeof(vp_address));
-    Obj->fops.IO_Send((uint8_t *)text, text_len);
+    Obj->fops.IO_Send(latin1, text_len);
     Obj->fops.IO_Send(end_of_text, sizeof(end_of_text));
 
     DWIN_LOG_DBG("Waiting for ACK...");
@@ -510,7 +517,19 @@ int dwin_write_data_to_variable_storage(DWIN_Object_t *Obj, uint8_t *pData, uint
         return -1;
     }
 
-    int ret = dwin_transact_write(Obj, vp_address, pData, (uint8_t)data_size, true);
+    int ret = -1;
+
+    // the same bytes at the same address: sending a lost frame again does no harm
+    for (uint8_t attempt = 0; (attempt <= DWIN_OTA_WRITE_RETRIES) && (ret < 0); attempt++)
+    {
+        if (attempt > 0)
+        {
+            DWIN_LOG_WRN("Fragment %d not acknowledged, sending it again (%d/%d)", fragment, attempt, DWIN_OTA_WRITE_RETRIES);
+        }
+
+        ret = dwin_transact_write(Obj, vp_address, pData, (uint8_t)data_size, true);
+    }
+
     if (ret == 0)
     {
         Obj->LastVarStorageWriteSize = data_size;
@@ -521,10 +540,16 @@ int dwin_write_data_to_variable_storage(DWIN_Object_t *Obj, uint8_t *pData, uint
 
 int dwin_write_from_variable_storage_to_nor_flash(DWIN_Object_t *Obj, uint16_t destination_id)
 {
-    if (!dwin_is_ready(Obj) || Obj->fops.IO_FlushBuffer == NULL || Obj->fops.IO_GetTickCb == NULL)
+    if (!dwin_is_ready(Obj) || Obj->fops.IO_FlushBuffer == NULL || Obj->fops.IO_GetTickCb == NULL ||
+        Obj->fops.IO_SleepMsec == NULL)
     {
         return -1;
     }
+
+#if DWIN_NOR_FLASH_WAIT_READY
+    const uint16_t delay_field = DWIN_NOR_FLASH_READY_DELAY_FIELD;
+#else
+    const uint16_t delay_field = DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS;
 
     // Wait for the NOR flash to be ready
     if (Obj->NorFlashWritten)
@@ -536,14 +561,16 @@ int dwin_write_from_variable_storage_to_nor_flash(DWIN_Object_t *Obj, uint16_t d
             Obj->fops.IO_SleepMsec(DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS - elapsed);
         }
     }
+#endif
 
     uint8_t cmd[] = {DWIN_ENABLE_EXTERNAL_MEMORY_OPERATION,
                      DWIN_WRITE_32KBYTES_DATA_BLOCK,
                      HI8(destination_id), LO8(destination_id),
                      HI8(DWIN_VARIABLE_STORAGE_START_UPDATE_SPACE_ADDRESS), LO8(DWIN_VARIABLE_STORAGE_START_UPDATE_SPACE_ADDRESS),
-                     HI8(DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS), LO8(DWIN_NOR_FLASH_DELAY_BETWEEN_WRITE_OPERATIONS),
+                     HI8(delay_field), LO8(delay_field),
                      0x00, 0x00, 0x00, 0x00};
 
+    // not sent again when the ACK is missing: the display may be committing the block already
     int ret = dwin_transact_write(Obj, DWIN_VP_WRITE_NOR_FLASH_OPERATION, cmd, sizeof(cmd), true);
     if (ret < 0)
     {
@@ -557,8 +584,31 @@ int dwin_write_from_variable_storage_to_nor_flash(DWIN_Object_t *Obj, uint16_t d
     /* A fresh fragment sequence starts after every flash commit. */
     Obj->LastVarStorageWriteSize = 0;
 
-    // Check if the external memory operation was successful
     uint16_t external_memory_operation_status = 0;
+
+#if DWIN_NOR_FLASH_WAIT_READY
+    // The display clears the enable byte once the block is in the flash. It may not answer
+    // while it is busy, so a failed read only means "not yet".
+    for (;;)
+    {
+        ret = dwin_read_variable(Obj, &external_memory_operation_status, DWIN_VP_WRITE_NOR_FLASH_OPERATION);
+        if (ret == 0 && HI8(external_memory_operation_status) != DWIN_ENABLE_EXTERNAL_MEMORY_OPERATION)
+        {
+            DWIN_LOG_DBG("Block committed in %u ms", (unsigned int)(Obj->fops.IO_GetTickCb() - Obj->LastNorFlashWriteTick));
+            return 0;
+        }
+
+        if ((Obj->fops.IO_GetTickCb() - Obj->LastNorFlashWriteTick) >= DWIN_NOR_FLASH_READY_TIMEOUT_MS)
+        {
+            DWIN_LOG_ERR("Display did not finish the flash write in %d ms. Status: %04X", DWIN_NOR_FLASH_READY_TIMEOUT_MS,
+                         external_memory_operation_status);
+            return -1;
+        }
+
+        Obj->fops.IO_SleepMsec(DWIN_NOR_FLASH_READY_POLL_MS);
+    }
+#else
+    // Check if the external memory operation was successful
     ret = dwin_read_variable(Obj, &external_memory_operation_status, DWIN_VP_WRITE_NOR_FLASH_OPERATION);
     if (ret < 0 || (external_memory_operation_status & (DWIN_ENABLE_EXTERNAL_MEMORY_OPERATION << 8)) != 0)
     {
@@ -567,6 +617,7 @@ int dwin_write_from_variable_storage_to_nor_flash(DWIN_Object_t *Obj, uint16_t d
     }
 
     return 0;
+#endif
 }
 
 /************************************************* Internal Functions *************************************************/
@@ -810,4 +861,54 @@ static int dwin_wait_for_ack(DWIN_Object_t *Obj)
     }
 
     return 0;
+}
+
+/**
+ * @brief   Convert a UTF-8 string to the panel's 8-bit text encoding (Latin-1)
+ * @param   in UTF-8 string, null terminated
+ * @param   out Output buffer (not null terminated)
+ * @param   out_size Size of the output buffer
+ * @note    Characters above U+00FF have no glyph in 8-bit mode and become '?'.
+ *          Malformed sequences are replaced byte by byte. The text is cut at out_size.
+ * @return  Number of bytes written to out
+ */
+static uint8_t utf8_to_latin1(const char *in, uint8_t *out, uint8_t out_size)
+{
+    const uint8_t *p = (const uint8_t *)in;
+    uint8_t n = 0;
+
+    while ((*p != '\0') && (n < out_size))
+    {
+        uint32_t cp;
+
+        if (p[0] < 0x80)
+        {
+            cp = p[0];
+            p += 1;
+        }
+        else if (((p[0] & 0xE0) == 0xC0) && ((p[1] & 0xC0) == 0x80))
+        {
+            cp = ((uint32_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+            p += 2;
+        }
+        else if (((p[0] & 0xF0) == 0xE0) && ((p[1] & 0xC0) == 0x80) && ((p[2] & 0xC0) == 0x80))
+        {
+            cp = '?'; // U+0800 and above
+            p += 3;
+        }
+        else if (((p[0] & 0xF8) == 0xF0) && ((p[1] & 0xC0) == 0x80) && ((p[2] & 0xC0) == 0x80) && ((p[3] & 0xC0) == 0x80))
+        {
+            cp = '?';
+            p += 4;
+        }
+        else
+        {
+            cp = '?';
+            p += 1;
+        }
+
+        out[n++] = (cp <= 0xFF) ? (uint8_t)cp : '?';
+    }
+
+    return n;
 }
