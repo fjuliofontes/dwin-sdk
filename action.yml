@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 name: DWIN display bundle
 description: Pack the DGUS files of a display project into .dwpk bundles for the DWIN SDK display OTA
 author: Fernando Fontes

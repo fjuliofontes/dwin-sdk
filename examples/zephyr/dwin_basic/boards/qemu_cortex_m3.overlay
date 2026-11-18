@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: MIT */
+
+/* The display sits on its own UART, uart0 stays the console. Copy this file under the name of
+ * your board and point the alias at the UART wired to the display. */
+/ {
+	aliases {
+		display-uart = &uart1;
+	};
+};
+
+&uart1 {
+	status = "okay";
+	current-speed = <115200>;
+};

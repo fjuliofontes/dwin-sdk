@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+#
+# Lets the SDK be the manifest repository of a west workspace, to build the Zephyr example
+# on its own (this is what the CI does):
+#
+#   west init -l dwin-sdk && west update
+#   west build -b qemu_cortex_m3 dwin-sdk/examples/zephyr/dwin_basic
+#
+# A project that uses the SDK lists it in its own manifest instead, this file is then ignored.
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: v4.1.0
+      import:
+        name-allowlist:
+          - cmsis
+          - cmsis_6
+
+  self:
+    path: dwin-sdk

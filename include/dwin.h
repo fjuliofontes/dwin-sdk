@@ -6,6 +6,8 @@
  * @author  Fernando Fontes 
  * @note    Platform Target: portable (ESP-IDF / Zephyr / bare-metal)
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

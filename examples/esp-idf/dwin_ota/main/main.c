@@ -12,6 +12,8 @@
  *
  *              tools/dwin_pack.py pack DWIN_SET --version 1.4.0 --last 22 -o hmi-1.4.0.dwpk
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -46,7 +48,8 @@
 #define WIFI_PASSWORD "my-password"
 #define WIFI_CONNECTED_BIT BIT0
 
-/* The bundle with the DGUS files to refresh. */
+/* The bundle with the DGUS files to refresh. Plain HTTP is only good for a test against a machine on
+ * your desk: in a product use an https:// URL and set .cert_pem, a bundle is not signed. */
 #define OTA_BUNDLE_URL "http://192.168.1.10:8000/display/hmi-1.4.0.dwpk"
 
 /***************************************************** Constants ******************************************************/

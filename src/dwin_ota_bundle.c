@@ -16,6 +16,8 @@
  *
  *          The layout of the bundle is described in dwin_ota_bundle.h.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -66,7 +68,7 @@ enum dwin_ota_bundle_state
 };
 
 /***************************************************** Constants ******************************************************/
-DWIN_LOG_MODULE_REGISTER();
+DWIN_LOG_MODULE_DECLARE();
 
 static const uint8_t bundle_magic[] = {'D', 'W', 'P', 'K'};
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # DWIN SDK - Zephyr module.
 #
 # Add the SDK to your west manifest, or point ZEPHYR_EXTRA_MODULES at the

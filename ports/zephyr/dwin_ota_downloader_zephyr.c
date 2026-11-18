@@ -6,6 +6,8 @@
  * @author  Fernando Fontes
  * @note    Platform Target: Zephyr RTOS with the nRF Connect SDK downloader library
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -52,7 +54,7 @@ enum flags_t
 };
 
 /***************************************************** Constants ******************************************************/
-DWIN_LOG_MODULE_REGISTER();
+DWIN_LOG_MODULE_DECLARE();
 
 /***************************************************** Variables ******************************************************/
 static DWIN_Object_t *dl_dwin_object;

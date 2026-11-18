@@ -6,6 +6,8 @@
  * @author  Fernando Fontes
  * @note    Platform Target: ESP32 family (ESP-IDF v5.x)
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

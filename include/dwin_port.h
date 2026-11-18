@@ -10,6 +10,8 @@
  *          entirely optional: an application can implement the nine callbacks of
  *          DWIN_IO_t itself and call dwin_register_bus_io() directly.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

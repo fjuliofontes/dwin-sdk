@@ -6,6 +6,8 @@
  * @author  Fernando Fontes
  * @note    Platform Target: ESP32 family (ESP-IDF v5.x)
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -52,7 +54,7 @@ enum download_result
 };
 
 /***************************************************** Constants ******************************************************/
-DWIN_LOG_MODULE_REGISTER();
+DWIN_LOG_MODULE_DECLARE();
 
 /***************************************************** Variables ******************************************************/
 static dwin_ota_http_cfg_t ota_cfg;

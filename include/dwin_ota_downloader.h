@@ -6,6 +6,8 @@
  * @author  Fernando Fontes
  * @note    Platform Target: Zephyr RTOS with the nRF Connect SDK downloader library
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

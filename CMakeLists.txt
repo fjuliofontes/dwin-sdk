@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # DWIN SDK - ESP-IDF component registration.
 #
 # Drop this folder into <project>/components/, or add it with the component

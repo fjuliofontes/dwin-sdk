@@ -6,6 +6,8 @@
  * @author  Fernando Fontes
  * @note    Platform Target: portable (ESP-IDF / Zephyr / bare-metal)
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -26,8 +28,9 @@
 
 #include "esp_log.h"
 
+/* The tag is a per file static, so registering and declaring are the same thing here. */
 #define DWIN_LOG_MODULE_REGISTER() static const char *DWIN_LOG_TAG = "dwin"
-#define DWIN_LOG_MODULE_DECLARE()  extern const char *DWIN_LOG_TAG
+#define DWIN_LOG_MODULE_DECLARE()  static const char *DWIN_LOG_TAG = "dwin"
 
 #define DWIN_LOG_ERR(...) ESP_LOGE(DWIN_LOG_TAG, __VA_ARGS__)
 #define DWIN_LOG_WRN(...) ESP_LOGW(DWIN_LOG_TAG, __VA_ARGS__)

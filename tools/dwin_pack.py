@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Pack DGUS files into a single .dwpk bundle for the DWIN SDK display OTA.
 
 Bundle layout, every field little-endian:
@@ -22,7 +23,7 @@ Bundle layout, every field little-endian:
     File data, in the order of the entries.
 
 Usage:
-    dwin_pack.py pack HMI_OTA_NITRO --version 1.4.0 --last 22 -o hmi.dwpk
+    dwin_pack.py pack DWIN_SET --version 1.4.0 --last 22 -o hmi.dwpk
     dwin_pack.py list hmi.dwpk
 """
 

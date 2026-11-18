@@ -13,6 +13,8 @@
  *              - committing every 32KB block to the NOR flash,
  *              - respecting the mandatory delay between flash write operations.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

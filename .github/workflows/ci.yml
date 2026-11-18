@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Core and tools on the host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The core has no platform dependency, so a desktop compiler is the fastest warning check.
+      - name: Compile the portable core
+        run: |
+          gcc   -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iinclude src/*.c
+          clang -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iinclude src/*.c
+
+      - name: Pack and verify a bundle
+        run: |
+          mkdir set
+          head -c 200000 /dev/urandom > set/23.icl
+          head -c 70000  /dev/urandom > set/24.icl
+          head -c 131076 /dev/zero    > set/22_Config.bin
+          head -c 500    /dev/urandom > set/13TouchFile.bin
+          head -c 1000   /dev/urandom > set/0.png
+
+          tools/dwin_pack.py pack set/23.icl set/24.icl set/22_Config.bin --version 1.2.3 --last 22 -o plain.dwpk
+          tools/dwin_pack.py list plain.dwpk
+
+          tools/dwin_release.py --source set --files "13 22 23 24" --full-exclude 24 \
+              --version v1.2.3 --version-vp 0x1600 --version-prefix v. --delta false --output-dir dist
+          tools/dwin_pack.py list dist/hmi-1.2.3.dwpk
+
+          # A corrupt bundle has to be refused.
+          printf 'x' | dd of=plain.dwpk bs=1 seek=40 conv=notrunc status=none
+          if tools/dwin_pack.py list plain.dwpk; then
+            echo "::error::a corrupt bundle was accepted"
+            exit 1
+          fi
+
+  esp-idf:
+    name: ESP-IDF ${{ matrix.idf }} / ${{ matrix.target }} / ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: [release-v5.1, release-v5.4]
+        target: [esp32, esp32s3]
+        example: [dwin_basic, dwin_ota]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ matrix.idf }}
+          target: ${{ matrix.target }}
+          path: examples/esp-idf/${{ matrix.example }}
+
+  zephyr:
+    name: Zephyr / qemu_cortex_m3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dwin-sdk
+
+      # west.yml of the SDK pins Zephyr and pulls only the modules this build needs.
+      - uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: dwin-sdk
+          toolchains: arm-zephyr-eabi
+
+      - name: Build the example
+        run: west build -b qemu_cortex_m3 -d build dwin-sdk/examples/zephyr/dwin_basic

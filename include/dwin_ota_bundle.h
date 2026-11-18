@@ -32,6 +32,8 @@
  *          whole before the display is touched, then every file is streamed into the NOR flash
  *          through dwin_ota.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

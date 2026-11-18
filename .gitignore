@@ -7,3 +7,7 @@ dependencies.lock
 .DS_Store
 *.o
 *.a
+# display bundles carry the assets of a product, they do not belong here
+*.dwpk
+dist/
+__pycache__/

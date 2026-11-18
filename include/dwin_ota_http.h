@@ -11,6 +11,8 @@
  *          straight into the display NOR flash. The whole transfer runs in its own
  *          task and reports through the dwin_ota event callback.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/

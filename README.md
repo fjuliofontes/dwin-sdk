@@ -1,5 +1,7 @@
 # DWIN SDK
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A portable C driver and **over-the-air asset updater** for DWIN DGUS displays.
 
 There is plenty of Arduino sketch material around for these panels, but very
@@ -17,7 +19,8 @@ display NOR flash at runtime. This SDK does both.
 - **Documented protocol** — see [docs/PROTOCOL.md](docs/PROTOCOL.md) for the
   reverse engineered frame format and the NOR flash write sequence.
 
-Validated on nRF54L15 (Zephyr) in production, and built for ESP32 (ESP-IDF v5.x).
+In production on nRF54L15 (Zephyr / nRF Connect SDK), and tested on ESP32-S3
+(ESP-IDF v5.x).
 
 ## Layout
 
@@ -34,6 +37,7 @@ src/                        portable core, no platform dependencies
 ports/esp-idf/              UART glue + HTTP OTA client
 ports/zephyr/               UART glue + downloader OTA client
 examples/esp-idf/           dwin_basic, dwin_ota
+examples/zephyr/            dwin_basic
 tools/dwin_pack.py          packs DGUS files into a .dwpk bundle
 tools/dwin_release.py       builds the full and the delta bundle of a release
 action.yml                  GitHub action around dwin_release.py
@@ -103,6 +107,7 @@ the device to `dwin_port_init()`:
 ```
 
 The rest of the API is identical to the ESP-IDF one.
+[examples/zephyr/dwin_basic](examples/zephyr/dwin_basic) is a complete application.
 
 ## Display OTA
 
@@ -317,6 +322,24 @@ for a single DGUS file, is the whole contract. Anything that can produce
 bytes — MQTT chunks, an SD card, a USB bulk endpoint, a modem AT command — can
 drive a display update with a dozen lines of glue.
 
+### Security
+
+A bundle is protected against corruption, not against tampering: the CRCs tell a
+broken download from a good one, but nothing in a `.dwpk` proves who made it. A
+display accepts any well formed bundle it is given, and `min_version` only stops
+a downgrade. Whoever can put a bundle in front of the device decides what the
+panel shows and which touch areas it has.
+
+That makes the transport the only line of defence:
+
+- Download over **HTTPS**, with the certificate of your server in `cert_pem`
+  (ESP-IDF) or a `sec_tag` (Zephyr). The plain `http://` URL of the `dwin_ota`
+  example is there to try it against a laptop, not to ship.
+- Leave `skip_cert_common_name_check` off outside development.
+- If the bundle arrives another way (MQTT, SD card, USB), authenticate it before
+  it reaches `dwin_ota_bundle_write()`, for instance by checking a signature over
+  the whole file.
+
 ## API summary
 
 | Function | What it does |
@@ -376,4 +399,13 @@ different system VP map, so the widget calls will work but the system ones
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+Open source under the [MIT License](LICENSE), copyright (c) 2026 Fernando Fontes.
+
+You may use, modify and redistribute it, in commercial and closed source products
+included. The only condition is that the copyright and permission notice of
+[LICENSE](LICENSE) stays in every copy or substantial portion of the software. It
+comes without warranty of any kind.
+
+This project is not affiliated with, or endorsed by, DWIN Technology. DWIN and
+DGUS are trademarks of their owner, and the protocol notes are not an official
+document.

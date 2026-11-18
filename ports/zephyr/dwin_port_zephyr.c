@@ -6,6 +6,8 @@
  * @author  Fernando Fontes 
  * @note    Platform Target: Zephyr RTOS (validated on nRF54L15)
  *
+ * SPDX-License-Identifier: MIT
+ *
  * TAB SIZE: 4 SPACES
  *
  ***********************************************************************************************************************/
@@ -39,7 +41,7 @@ typedef struct
 } RingBuffer_t;
 
 /***************************************************** Constants ******************************************************/
-DWIN_LOG_MODULE_REGISTER();
+DWIN_LOG_MODULE_DECLARE();
 
 #if DT_HAS_ALIAS(display_uart)
 static const struct device *const default_uart_dev = DEVICE_DT_GET(DT_ALIAS(display_uart));

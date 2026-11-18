@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build the .dwpk bundles of a display release: a full one and a delta one.
 
     full    every file of --files, minus --full-exclude (typically the font)
