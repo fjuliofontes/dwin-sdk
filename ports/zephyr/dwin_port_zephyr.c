@@ -245,10 +245,9 @@ static void serial_cb_int(const struct device *dev, void *user_data)
     ARG_UNUSED(dev);
     ARG_UNUSED(user_data);
 
-    if (!uart_irq_update(display_uart_dev))
-    {
-        return;
-    }
+    /* The return value is not used: it is void from Zephyr 4.5 on, and before that every driver
+     * returned 1. */
+    (void)uart_irq_update(display_uart_dev);
 
     if (!uart_irq_rx_ready(display_uart_dev))
     {

@@ -68,14 +68,26 @@ jobs:
           path: examples/esp-idf/${{ matrix.example }}
 
   zephyr:
-    name: Zephyr / qemu_cortex_m3
+    name: Zephyr ${{ matrix.zephyr }} / qemu_cortex_m3
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        zephyr: [v4.4.2, v4.5.0]
     steps:
       - uses: actions/checkout@v4
         with:
           path: dwin-sdk
 
-      # west.yml of the SDK pins Zephyr and pulls only the modules this build needs.
+      # west.yml of the SDK pins one Zephyr release, the matrix swaps it for the one under test.
+      - name: Select the Zephyr release
+        env:
+          ZEPHYR_REVISION: ${{ matrix.zephyr }}
+        run: |
+          sed -i "s/revision: v.*/revision: $ZEPHYR_REVISION/" dwin-sdk/west.yml
+          grep revision dwin-sdk/west.yml
+
+      # The manifest pulls only the modules this build needs.
       - uses: zephyrproject-rtos/action-zephyr-setup@v1
         with:
           app-path: dwin-sdk
