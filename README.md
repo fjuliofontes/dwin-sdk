@@ -35,6 +35,8 @@ ports/esp-idf/              UART glue + HTTP OTA client
 ports/zephyr/               UART glue + downloader OTA client
 examples/esp-idf/           dwin_basic, dwin_ota
 tools/dwin_pack.py          packs DGUS files into a .dwpk bundle
+tools/dwin_release.py       builds the full and the delta bundle of a release
+action.yml                  GitHub action around dwin_release.py
 docs/PROTOCOL.md            the reverse engineered DGUS protocol
 ```
 
@@ -193,6 +195,88 @@ is reported after it was written, not prevented.
 
 The context takes about 700 bytes of RAM with the default of 16 files per bundle
 (`CONFIG_DWIN_OTA_BUNDLE_MAX_FILES`).
+
+### Building the bundles in CI
+
+The repository is also a GitHub action. In the repository of a DGUS project it
+turns a release tag into two bundles:
+
+| Bundle | Content |
+|---|---|
+| `hmi-2.4.5.dwpk` | full: every file of `files`, minus `full-exclude` |
+| `hmi-2.4.5-from-2.4.4.dwpk` | delta: the files that changed since the previous release tag, plus the file that carries the version |
+
+```yaml
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: bundle
+        uses: fjuliofontes/dwin-sdk@main
+        with:
+          files: 0 13 14 22 23 24
+          full-exclude: 0            # the font: 3 MB, minutes on the panel, rarely changes
+          version: ${{ github.ref_name }}
+          version-vp: 0x1600         # text box that shows the version
+          version-prefix: v.         # the panel shows "v.2.4.5"
+      - run: gh release create "$GITHUB_REF_NAME" ${{ steps.bundle.outputs.full }} ${{ steps.bundle.outputs.delta }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+```
+
+Pin the action to the SDK release your firmware is built with, so the packer and
+the reader on the device always agree on the bundle format.
+
+| Input | Default | |
+|---|---|---|
+| `source` | `DWIN_SET` | directory with the DGUS files |
+| `files` | required | files of the display, by number or by name. Page images (`0.png`) sharing a number are ignored |
+| `full-exclude` | | files left out of the full bundle |
+| `version` | | version of the release, the tag name is fine. Empty reads it from the text box at `version-vp` |
+| `tag-prefix` | `v` | prefix of the release tags |
+| `version-file` | `22` | file that carries the version: written last, part of every bundle |
+| `version-vp` | | VP of the version text box. Empty for a display without one |
+| `version-size` | `32` | size of the text box, in bytes |
+| `version-prefix` | | text shown before the version on the display |
+| `delta` | `true` | build the delta bundle |
+| `base` | | tag the delta is made against, defaults to the highest tag below the version |
+| `name` | `hmi` | first part of the bundle names |
+| `output-dir` | `dist` | where the bundles are written |
+| `flash-size` | `16` | display NOR flash size in MB |
+| `max-files` | `16` | `CONFIG_DWIN_OTA_BUNDLE_MAX_FILES` of the firmware |
+
+Outputs: `version`, `full`, `delta` (empty when there is no previous release),
+`base` and `changed`.
+
+There are two ways to version a display:
+
+- **The tag owns the version.** Pass `version`: the text box at `version-vp` is
+  stamped in the copy of `version-file` that goes into the bundles. The project
+  files are not modified, so the text typed in DGUS Tool is only a placeholder.
+- **DGUS Tool owns the version.** Leave `version` empty: it is read from the text
+  box and nothing is stamped.
+
+A delta bundle is only correct on a display that runs exactly the release it was
+made against, which is why that release is in its name. `min_version` only
+rejects older bundles, it does not check this: the firmware, or whatever serves
+the update, has to pick the delta when the display runs the base version and the
+full bundle otherwise. A file of `full-exclude` that changes is only delivered by
+the delta of that release; the action warns when it happens.
+
+The same script runs on a desk:
+
+```
+tools/dwin_release.py --source DWIN_SET --files "0 13 14 22 23 24" --full-exclude 0 \
+    --version 2.4.5 --version-vp 0x1600 --version-prefix v. --output-dir dist
+```
 
 ### With the bundled HTTP client (ESP-IDF)
 
