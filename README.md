@@ -198,6 +198,12 @@ the file that was being written, the ones before it are kept. Every file also
 carries a CRC, but the data goes straight into the NOR flash, so a corrupt file
 is reported after it was written, not prevented.
 
+A bundle whose authenticity can only be judged once it is all in (a signature
+over the whole file, checked on the fly) can be taken back with
+`dwin_ota_bundle_wipe()` before `dwin_ota_bundle_abort()`: every file it wrote
+is written over with `0xFF` while the display is still paused, so nothing of it
+is ever drawn. It takes as long as writing those files did.
+
 The context takes about 700 bytes of RAM with the default of 16 files per bundle
 (`CONFIG_DWIN_OTA_BUNDLE_MAX_FILES`).
 
