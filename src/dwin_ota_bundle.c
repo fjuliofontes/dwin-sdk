@@ -37,6 +37,9 @@
 
 #define DWIN_OTA_BUNDLE_FORMAT_VERSION 1
 
+/* Bytes of 0xFF handed to the display at a time by dwin_ota_bundle_wipe(), kept on the stack. */
+#define DWIN_OTA_BUNDLE_WIPE_CHUNK_SIZE 64
+
 /* Offsets inside the header. */
 #define DWIN_OTA_BUNDLE_HDR_FORMAT 4
 #define DWIN_OTA_BUNDLE_HDR_FILE_COUNT 6
@@ -240,6 +243,78 @@ int dwin_ota_bundle_abort(dwin_ota_bundle_t *bundle)
     }
 
     bundle->state = BUNDLE_STATE_IDLE;
+
+    return 0;
+}
+
+int dwin_ota_bundle_wipe(dwin_ota_bundle_t *bundle)
+{
+    if (bundle == NULL)
+    {
+        return -1;
+    }
+
+    /* The display is paused when the file table is accepted, right before the first file. */
+    if (!bundle->display_paused)
+    {
+        return 0;
+    }
+
+    if (bundle->state != BUNDLE_STATE_DATA && bundle->state != BUNDLE_STATE_DONE &&
+        bundle->state != BUNDLE_STATE_FAILED)
+    {
+        DWIN_LOG_ERR("The file table is not known, cannot tell which files to wipe");
+        return -1;
+    }
+
+    /* Every file before file_index is in the NOR flash, the one at file_index may be partly in. */
+    uint16_t count = (bundle->file_index < bundle->file_count) ? (uint16_t)(bundle->file_index + 1) : bundle->file_count;
+    uint8_t blank[DWIN_OTA_BUNDLE_WIPE_CHUNK_SIZE];
+
+    DWIN_LOG_WRN("Wiping the %d files the bundle wrote to the display", count);
+
+    close_file(bundle);
+    memset(blank, 0xFF, sizeof(blank));
+
+    /* Whatever happens next, this transfer is over. */
+    bundle->state = BUNDLE_STATE_FAILED;
+
+    for (uint16_t i = 0; i < count; i++)
+    {
+        const dwin_ota_bundle_entry_t *entry = &bundle->entries[i];
+        const dwin_ota_cfg_t ota_cfg = {
+            .Obj = bundle->cfg.Obj,
+            .file_id = entry->file_id,
+            .file_size = entry->size,
+            .nor_flash_size = bundle->cfg.nor_flash_size,
+            .callback = NULL,
+        };
+        uint32_t remaining = entry->size;
+        int ret = dwin_ota_begin(&bundle->ota, &ota_cfg);
+
+        while (ret == 0 && remaining > 0)
+        {
+            size_t chunk = DWIN_OTA_BUNDLE_MIN((size_t)remaining, sizeof(blank));
+
+            ret = dwin_ota_write(&bundle->ota, blank, chunk);
+            remaining -= (uint32_t)chunk;
+        }
+
+        if (ret == 0)
+        {
+            ret = dwin_ota_finish(&bundle->ota);
+        }
+
+        if (ret < 0)
+        {
+            DWIN_LOG_ERR("Failed to wipe file %d, the bundle is partly left in the display", entry->file_id);
+            dwin_ota_abort(&bundle->ota);
+            bundle->cause = DWIN_OTA_ERROR_CAUSE_DISPLAY;
+            return -1;
+        }
+    }
+
+    DWIN_LOG_INF("Bundle wiped from the display");
 
     return 0;
 }

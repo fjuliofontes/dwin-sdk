@@ -187,6 +187,25 @@ int dwin_ota_bundle_abort(dwin_ota_bundle_t *bundle);
 
 /**
  *
+ * @brief   Write 0xFF over every file the transfer put in the NOR flash, to take a bundle back.
+ * @param   bundle  Pointer to the bundle context.
+ * @note    Meant for a bundle that turns out not to be genuine once it is in, for instance when a
+ *          signature over the whole file can only be checked after the last byte. Call it before
+ *          dwin_ota_bundle_abort(): the display is still paused, so nothing of the bundle is ever
+ *          drawn, and the abort then resets it.
+ * @note    The display has no erase command, so the files are written again, blank, which takes as
+ *          long as writing them did. The files the transfer had not reached yet are left as they
+ *          were. The display ends up without the wiped assets, typically without a version to report.
+ * @note    Does nothing when the display was not touched yet. The transfer cannot be continued
+ *          afterwards. Not available between dwin_ota_bundle_restart() and the file table being
+ *          received again.
+ * @return  Returns 0 on success, otherwise an error code.
+ *
+ **/
+int dwin_ota_bundle_wipe(dwin_ota_bundle_t *bundle);
+
+/**
+ *
  * @brief   Step back to the start of the file being received, to resume a broken download.
  * @param   bundle  Pointer to the bundle context.
  * @param   offset  Bundle offset the next dwin_ota_bundle_write() must start from, typically
