@@ -1,0 +1,109 @@
+name: DWIN display bundle
+description: Pack the DGUS files of a display project into .dwpk bundles for the DWIN SDK display OTA
+author: Fernando Fontes
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  source:
+    description: Directory with the DGUS files
+    default: DWIN_SET
+  files:
+    description: DGUS files of the display, by number or by name, e.g. "0 13 14 22 23 24"
+    required: true
+  full-exclude:
+    description: Files left out of the full bundle, typically the font ("0"). The delta bundle still carries them when they change.
+    default: ""
+  version:
+    description: Version of the release; a tag name such as v2.4.5 is fine. Empty reads it from the text box at version-vp.
+    default: ""
+  tag-prefix:
+    description: Prefix of the release tags
+    default: v
+  version-file:
+    description: Number of the DGUS file that carries the version. It is written last and is part of every bundle.
+    default: "22"
+  version-vp:
+    description: VP of the version text box, e.g. 0x1600. With a version given, the text box is stamped in the bundles. Empty for a display without one.
+    default: ""
+  version-size:
+    description: Size of the version text box, in bytes
+    default: "32"
+  version-prefix:
+    description: Text shown before the version on the display, e.g. "v."
+    default: ""
+  delta:
+    description: Also build a bundle with only the files changed since the previous release tag
+    default: "true"
+  base:
+    description: Release tag the delta bundle is made against. Defaults to the highest tag below the version.
+    default: ""
+  name:
+    description: First part of the bundle file names
+    default: hmi
+  output-dir:
+    description: Where the bundles are written
+    default: dist
+  flash-size:
+    description: Display NOR flash size in MB, 8 or 16
+    default: "16"
+  max-files:
+    description: CONFIG_DWIN_OTA_BUNDLE_MAX_FILES of the firmware
+    default: "16"
+
+outputs:
+  version:
+    description: Version label of the bundles, dotted numeric
+    value: ${{ steps.release.outputs.version }}
+  full:
+    description: Path of the full bundle
+    value: ${{ steps.release.outputs.full }}
+  delta:
+    description: Path of the delta bundle, empty when there is no previous release
+    value: ${{ steps.release.outputs.delta }}
+  base:
+    description: Release tag the delta bundle was made against
+    value: ${{ steps.release.outputs.base }}
+  changed:
+    description: Numbers of the files that changed since the base
+    value: ${{ steps.release.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: release
+      shell: bash
+      env:
+        IN_SOURCE: ${{ inputs.source }}
+        IN_FILES: ${{ inputs.files }}
+        IN_FULL_EXCLUDE: ${{ inputs.full-exclude }}
+        IN_VERSION: ${{ inputs.version }}
+        IN_TAG_PREFIX: ${{ inputs.tag-prefix }}
+        IN_VERSION_FILE: ${{ inputs.version-file }}
+        IN_VERSION_VP: ${{ inputs.version-vp }}
+        IN_VERSION_SIZE: ${{ inputs.version-size }}
+        IN_VERSION_PREFIX: ${{ inputs.version-prefix }}
+        IN_DELTA: ${{ inputs.delta }}
+        IN_BASE: ${{ inputs.base }}
+        IN_NAME: ${{ inputs.name }}
+        IN_OUTPUT_DIR: ${{ inputs.output-dir }}
+        IN_FLASH_SIZE: ${{ inputs.flash-size }}
+        IN_MAX_FILES: ${{ inputs.max-files }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/tools/dwin_release.py" \
+          --source="$IN_SOURCE" \
+          --files="$IN_FILES" \
+          --full-exclude="$IN_FULL_EXCLUDE" \
+          --version="$IN_VERSION" \
+          --tag-prefix="$IN_TAG_PREFIX" \
+          --version-file="$IN_VERSION_FILE" \
+          --version-vp="$IN_VERSION_VP" \
+          --version-size="$IN_VERSION_SIZE" \
+          --version-prefix="$IN_VERSION_PREFIX" \
+          --delta="$IN_DELTA" \
+          --base="$IN_BASE" \
+          --name="$IN_NAME" \
+          --output-dir="$IN_OUTPUT_DIR" \
+          --flash-size="$IN_FLASH_SIZE" \
+          --max-files="$IN_MAX_FILES"
